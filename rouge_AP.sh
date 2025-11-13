@@ -1,13 +1,14 @@
 #!/bin/bash
-# Version 0.7 14/11/25 2:52  
+# Version 0.8 14/11/25 3:20  
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
+SSID="Open-To-All"
+CHANNEL="40" # Supports 2.4GHz and 5GHz
+
 WIFI_INTERFACE="wlan0"
 LAN_INTERFACE="eth0" # Internet
-SSID="Open-To-All"
-CHANNEL="6"
 targets_path="/home/$UN/Desktop"
 OUI_FILE="$targets_path/oui.txt"
 LOG_FILE="$targets_path/AP_clients.log"
@@ -15,10 +16,12 @@ AP_IP="192.168.50.1"
 DHCP_RANGE_START="192.168.50.10"
 DHCP_RANGE_END="192.168.50.11"
 
+
 # --- COLORS ---
 GREEN="\e[32m"
 RED="\e[31m"
 NC="\e[0m"  # No Color
+
 
 # --- CLEANUP FUNCTION ---
 cleanup() {
@@ -117,16 +120,39 @@ sudo iw dev $WIFI_INTERFACE set type ap 2>/dev/null
 sudo ip addr add $AP_IP/24 dev $WIFI_INTERFACE
 sudo ip link set $WIFI_INTERFACE up
 
+# --- DETERMINE BAND & CAPABILITIES BASED ON CHANNEL ---
+if (( CHANNEL >= 1 && CHANNEL <= 14 )); then
+    HW_MODE="g"
+    IEEE80211N="ieee80211n=1"
+    IEEE80211AC=""
+    HT_CAPAB="[HT40+]"
+    VHT_CAPAB=""
+elif (( CHANNEL >= 36 && CHANNEL <= 165 )); then
+    HW_MODE="a"
+    IEEE80211N="ieee80211n=1"
+    IEEE80211AC="ieee80211ac=1"
+    HT_CAPAB="[HT40+]"
+    VHT_CAPAB="[VHT80]"
+else
+    echo -e "${RED}Invalid channel number: $CHANNEL${NC}"
+    exit 1
+fi
+
 # --- HOSTAPD CONFIG ---
 HOSTAPD_CONF=$(mktemp)
 cat <<EOF > $HOSTAPD_CONF
 interface=$WIFI_INTERFACE
 driver=nl80211
 ssid=$SSID
-hw_mode=g
+hw_mode=$HW_MODE
 channel=$CHANNEL
 ignore_broadcast_ssid=0
+$IEEE80211N
+$IEEE80211AC
+ht_capab=$HT_CAPAB
+vht_capab=$VHT_CAPAB
 EOF
+
 
 echo "[*] Starting hostapd..."
 sudo hostapd $HOSTAPD_CONF > /dev/null 2>&1 &
