@@ -4,7 +4,7 @@
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
-SSID="OOOpen"
+SSID="Open WiFi"
 CHANNEL="6"    # Supports 2.4GHz and 5GHz. You can leave empty
 AP_MAC=""      # You can leave empty
 COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty.
