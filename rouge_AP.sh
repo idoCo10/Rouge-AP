@@ -1,16 +1,17 @@
 #!/bin/bash
-# Version 1.0 14/11/25 23:17 
+# Version 1.2 15/11/25 03:26
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
 SSID="OOOpen"
-CHANNEL="6"    # Supports 2.4GHz and 5GHz
-AP_MAC="C2:03:84:32:0B:5C"
-COUNTRY="TH"   # set your country here its important for RESTRICTED DFS channels - the adapter will refuse to cast on DFS channels.  
+CHANNEL="6"    # Supports 2.4GHz and 5GHz. You can leave empty
+AP_MAC=""      # You can leave empty
+COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty.
+                
 
 WIFI_INTERFACE="wlan0"
-LAN_INTERFACE="eth0" # Internet
+LAN_INTERFACE="eth0"   # Internet
 targets_path="/home/$UN/Desktop"
 OUI_FILE="$targets_path/oui.txt"
 LOG_FILE="$targets_path/AP_clients.log"
@@ -22,13 +23,97 @@ DHCP_RANGE_END="192.168.50.11"
 # --- COLORS ---
 GREEN="\e[32m"
 RED="\e[31m"
+YELLOW="\e[33m"  
+BLUE="\e[34m"
 NC="\e[0m"  # No Color
+
+
+# --- HARDWARE CHECK ---
+hardware_check() {
+    if ! ip link show "$WIFI_INTERFACE" > /dev/null 2>&1; then
+        echo -e "${RED}[!] Interface $WIFI_INTERFACE not found${NC}"
+        return 1
+    fi
+
+    if iw list 2>/dev/null | grep -q "AP"; then
+        echo -e "${GREEN}[✓] Interface supports AP mode${NC}"
+    else
+        echo -e "${RED}[!] Interface may not support AP mode${NC}"
+        return 1
+    fi
+    return 0
+}
+
+# --- CHANNEL CHECK (USES GLOBAL VARIABLES) ---
+channel_check() {
+
+    # Get current regulatory domain
+    local current_reg
+    current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | sed 's/://')
+    echo -e "[*] Current regulatory country: ${current_reg:-Not set}"
+
+    # --- Set default country if not specified ---
+    if [[ -z "$COUNTRY" ]]; then
+        echo "[*] No country specified, defaulting to '00' (world regulatory domain)"
+        COUNTRY="00"
+    fi
+
+    # Set country only if different
+    if [[ "$current_reg" != "$COUNTRY" ]]; then
+        echo -e "[*] Changing regulatory country to $COUNTRY..."
+        sudo iw reg set "$COUNTRY" > /dev/null 2>&1
+    fi
+
+    # Get allowed channels
+    local allowed_channels dfs_channels
+    allowed_channels=$(iw list | grep -A10 "Frequencies:" | grep -oP '\[\K[0-9]+(?=\])')
+    dfs_channels=$(iw list | grep -A10 "Frequencies:" | grep "radar detection" | grep -oP '\[\K[0-9]+(?=\])')
+
+    # Validate channel
+    if ! echo "$allowed_channels" | grep -qw "$CHANNEL"; then
+        echo -e "${RED}[!] Channel $CHANNEL is not allowed in country: $COUNTRY${NC}"
+        return 1
+    fi
+
+    if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
+        echo -e "${RED}[!] Channel $CHANNEL is DFS (requires radar detection). Stopping.${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}[✓] Channel $CHANNEL is valid and allowed in "$COUNTRY".${NC}"
+    return 0
+}
+
+
+hardware_check || { echo -e "${RED}[!] Hardware check failed. Exiting.${NC}"; exit 1; }
+
+# --- Randomize 2.4GHz channel if not set ---
+if [[ -z "$CHANNEL" ]]; then
+    echo "[*] No channel specified, randomizing 2.4GHz channel..."
+
+    # Get allowed 2.4GHz channels for this country (non-DFS)
+    allowed_channels=$(iw list | grep -A10 "Frequencies:" \
+                      | grep -v "radar detection" \
+                      | grep -oP '\[\K[0-9]+(?=\])' \
+                      | awk '$1>=1 && $1<=14')  # limit to 2.4GHz
+    if [[ -z "$allowed_channels" ]]; then
+        echo "[!] Could not determine allowed 2.4GHz channels. Defaulting to 6."
+        CHANNEL=6
+    else
+        # Pick a random channel from the allowed ones
+        CHANNEL=$(echo "$allowed_channels" | shuf -n1)
+    fi
+    echo "[*] Random channel selected: $CHANNEL"
+fi
+channel_check || { echo -e "${RED}[!] Channel check failed. Exiting.${NC}"; exit 1; }
+
 
 
 # --- CLEANUP FUNCTION ---
 cleanup() {
     echo -e "\n\n[*] Stopping AP..."
     sudo pkill hostapd
+    sudo rm -f /tmp/hostapd.conf
     sudo pkill dnsmasq
     sudo rm -f /var/lib/misc/dnsmasq.leases
     sudo iptables -t nat -D POSTROUTING -o $LAN_INTERFACE -j MASQUERADE
@@ -36,7 +121,10 @@ cleanup() {
     sudo iptables -D FORWARD -i $WIFI_INTERFACE -o $LAN_INTERFACE -j ACCEPT
     sudo ip link set $WIFI_INTERFACE down
     sudo ip addr flush dev $WIFI_INTERFACE
+    sudo iw dev $WIFI_INTERFACE set type managed 2>/dev/null
+    sudo ip link set $WIFI_INTERFACE up
     sudo systemctl start NetworkManager
+    echo -e "${GREEN}[✓] Cleanup complete - Wi-Fi interface restored to normal mode${NC}"
     exit 0
 }
 
@@ -71,17 +159,65 @@ get_oui() {
 
 set_ap_mac() {
     local iface="$WIFI_INTERFACE"
+
+    # --- CASE 1: AP_MAC is empty → randomize MAC ---
+    if [[ -z "$AP_MAC" ]]; then
+        echo -e "[*] No AP MAC specified — randomizing MAC:"
+
+        # Bring interface down
+        sudo ip link set "$iface" down
+
+        # Get permanent MAC
+        local perm_output
+        perm_output=$(macchanger -p "$iface" 2>/dev/null)
+        local perm_mac
+        perm_mac=$(echo "$perm_output" | awk -F': ' '/Permanent MAC:/ {print toupper($2)}' | cut -d' ' -f1)
+
+        # Vendor
+        local perm_vendor
+        perm_vendor=$(get_oui "$perm_mac")
+
+        # Randomize MAC
+        local rand_output
+        rand_output=$(macchanger -r "$iface" 2>/dev/null)
+        local rand_mac
+        rand_mac=$(echo "$rand_output" | awk -F': ' '/New MAC:/ {print toupper($2)}' | cut -d' ' -f1)
+
+        # Fallback if parsing fails
+        if [[ -z "$rand_mac" ]]; then
+            rand_mac=$(ip link show "$iface" | awk '/link\/ether/ {print toupper($2)}')
+        fi
+
+        # Vendor
+        local rand_vendor
+        rand_vendor=$(get_oui "$rand_mac")
+
+        # Bring interface up
+        sudo ip link set "$iface" up
+
+        # Output
+        echo -e "      Permanent MAC:  $perm_mac   ($perm_vendor)"
+        echo -e "${GREEN}    ✓ Randomized MAC: $rand_mac   ($rand_vendor)${NC}"
+        return
+    fi
+
+    # --- CASE 2: AP_MAC is provided → use it ---
     local mac="$AP_MAC"
-    [[ -z "$mac" ]] && return    # If user leaves AP_MAC empty, skip
-    #echo "[*] Setting AP MAC address to $mac"
+
     sudo ip link set "$iface" down
     sudo ip link set dev "$iface" address "$mac"
     sudo ip link set "$iface" up
+
     # Verify
-    local new_mac=$(ip link show "$iface" | awk '/link\/ether/ {print toupper($2)}')
-    local vendor=$(get_oui "$new_mac")
-    echo "[*] New AP MAC applied: $new_mac ($vendor)"
+    local new_mac
+    new_mac=$(ip link show "$iface" | awk '/link\/ether/ {print toupper($2)}')
+    local vendor
+    vendor=$(get_oui "$new_mac")
+
+    echo "[*] Using provided MAC address: $new_mac ($vendor)"
 }
+
+
 
 
 # --- Wait for DHCP lease to appear (max 30s) ---
@@ -127,13 +263,12 @@ release_ip() {
 # --- PREPARATION ---
 check_oui
 
-echo "[*] Stopping NetworkManager..."
 sudo systemctl stop NetworkManager
 
 echo "[*] Setting $WIFI_INTERFACE to AP mode..."
 sudo ip link set $WIFI_INTERFACE down
 sudo ip addr flush dev $WIFI_INTERFACE
-#set_ap_mac
+set_ap_mac
 sudo iw dev $WIFI_INTERFACE set type ap 2>/dev/null
 sudo ip addr add $AP_IP/24 dev $WIFI_INTERFACE
 sudo ip link set $WIFI_INTERFACE up
@@ -177,7 +312,6 @@ cat <<EOF > $HOSTAPD_CONF
 interface=$WIFI_INTERFACE
 driver=nl80211
 ssid=$SSID
-bssid=$AP_MAC
 hw_mode=$HW_MODE
 channel=$CHANNEL
 ignore_broadcast_ssid=0
@@ -218,7 +352,7 @@ sudo iptables -A FORWARD -i $LAN_INTERFACE -o $WIFI_INTERFACE -m state --state R
 sudo iptables -A FORWARD -i $WIFI_INTERFACE -o $LAN_INTERFACE -j ACCEPT
 sudo sysctl -w net.ipv4.ip_forward=1 > /dev/null
 
-echo -e "[*] AP '$SSID' started on Channel '$CHANNEL'."
+echo -e "${GREEN}[✓] AP '$SSID' started on Channel '$CHANNEL'.${NC}"
 echo -e "[*] Waiting for clients:\n\n"
 
 # --- LOGGING ---
