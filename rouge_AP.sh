@@ -1,11 +1,13 @@
 #!/bin/bash
-# Version 0.8 14/11/25 3:20  
+# Version 1.0 14/11/25 23:17 
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
-SSID="Open-To-All"
-CHANNEL="40" # Supports 2.4GHz and 5GHz
+SSID="OOOpen"
+CHANNEL="6"    # Supports 2.4GHz and 5GHz
+AP_MAC="C2:03:84:32:0B:5C"
+COUNTRY="TH"   # set your country here its important for RESTRICTED DFS channels - the adapter will refuse to cast on DFS channels.  
 
 WIFI_INTERFACE="wlan0"
 LAN_INTERFACE="eth0" # Internet
@@ -67,6 +69,21 @@ get_oui() {
     echo "${VENDOR:-Unknown}"
 }
 
+set_ap_mac() {
+    local iface="$WIFI_INTERFACE"
+    local mac="$AP_MAC"
+    [[ -z "$mac" ]] && return    # If user leaves AP_MAC empty, skip
+    #echo "[*] Setting AP MAC address to $mac"
+    sudo ip link set "$iface" down
+    sudo ip link set dev "$iface" address "$mac"
+    sudo ip link set "$iface" up
+    # Verify
+    local new_mac=$(ip link show "$iface" | awk '/link\/ether/ {print toupper($2)}')
+    local vendor=$(get_oui "$new_mac")
+    echo "[*] New AP MAC applied: $new_mac ($vendor)"
+}
+
+
 # --- Wait for DHCP lease to appear (max 30s) ---
 wait_for_dhcp_info() {
     local mac=$1
@@ -116,6 +133,7 @@ sudo systemctl stop NetworkManager
 echo "[*] Setting $WIFI_INTERFACE to AP mode..."
 sudo ip link set $WIFI_INTERFACE down
 sudo ip addr flush dev $WIFI_INTERFACE
+#set_ap_mac
 sudo iw dev $WIFI_INTERFACE set type ap 2>/dev/null
 sudo ip addr add $AP_IP/24 dev $WIFI_INTERFACE
 sudo ip link set $WIFI_INTERFACE up
@@ -138,12 +156,28 @@ else
     exit 1
 fi
 
+
 # --- HOSTAPD CONFIG ---
-HOSTAPD_CONF=$(mktemp)
+HOSTAPD_CONF="/tmp/hostapd.conf"
+
+# Calculate center frequency based on channel
+get_center_freq() {
+    local channel=$1
+    case $channel in
+        36|40|44|48) echo "42" ;;
+        149|153|157|161) echo "155" ;;
+        165) echo "155" ;;
+        *) echo "$((channel + 2))" ;;
+    esac
+}
+
+CENTER_FREQ=$(get_center_freq $CHANNEL)
+
 cat <<EOF > $HOSTAPD_CONF
 interface=$WIFI_INTERFACE
 driver=nl80211
 ssid=$SSID
+bssid=$AP_MAC
 hw_mode=$HW_MODE
 channel=$CHANNEL
 ignore_broadcast_ssid=0
@@ -151,11 +185,22 @@ $IEEE80211N
 $IEEE80211AC
 ht_capab=$HT_CAPAB
 vht_capab=$VHT_CAPAB
+country_code=$COUNTRY
+ieee80211d=1
+ieee80211h=1
+auth_algs=1  # open wifi
+wmm_enabled=1
 EOF
 
+# Only add VHT settings for 5GHz
+if (( CHANNEL >= 36 && CHANNEL <= 165 )); then
+    echo "vht_oper_chwidth=1" >> $HOSTAPD_CONF
+    echo "vht_oper_centr_freq_seg0_idx=$CENTER_FREQ" >> $HOSTAPD_CONF
+fi
 
 echo "[*] Starting hostapd..."
 sudo hostapd $HOSTAPD_CONF > /dev/null 2>&1 &
+
 
 # --- DNSMASQ CONFIG ---
 DNSMASQ_CONF=$(mktemp)
