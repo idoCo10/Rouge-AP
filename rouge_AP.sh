@@ -17,7 +17,7 @@ OUI_FILE="$targets_path/oui.txt"
 LOG_FILE="$targets_path/AP_clients.log"
 AP_IP="192.168.50.1"
 DHCP_RANGE_START="192.168.50.10"
-DHCP_RANGE_END="192.168.50.11"
+DHCP_RANGE_END="192.168.50.20"
 
 
 # --- COLORS ---
