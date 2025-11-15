@@ -1,13 +1,13 @@
 #!/bin/bash
-# Version 1.5 16/11/25 00:05
+# Version 1.5 16/11/25 02:00
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
 SSID="OOOpen"
-CHANNEL="8"    # Supports 2.4GHz and 5GHz. You can leave empty too.
+CHANNEL="40"    # Supports 2.4GHz and 5GHz. You can leave empty too.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY="US"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
+COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
                 
 
 WIFI_INTERFACE="wlan0"
@@ -81,21 +81,25 @@ hardware_check() {
 
 # --- COUNTRY CHECK ---
 country_check() {
-
     # Get current regulatory domain
     local current_reg
     current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | sed 's/://')
     echo -e "[*] Current Country: ${current_reg:-Not set}"
 
-    # --- Set default country if not specified ---
-    if [[ -z "$COUNTRY" || "$COUNTRY" == "00" ]]; then
-        echo "[*] No country specified, defaulting to 'US'."
+    # If COUNTRY is empty AND current_reg is 00, set COUNTRY = US
+    if [[ -z "$COUNTRY" && "$current_reg" == "00" ]]; then
+        echo "[*] No country specified and current is 00, setting to 'US'."
         COUNTRY="US"
     fi
 
-    # Set country only if different
+    # If current_reg is US, set COUNTRY to US (silently)
+    if [[ "$current_reg" == "US" && -z "$COUNTRY" ]]; then
+        COUNTRY="US"
+    fi
+
+    # If COUNTRY has value and it's different from current_reg, then set it
     if [[ "$current_reg" != "$COUNTRY" ]]; then
-        echo -e "[*] Changing regulatory country to $COUNTRY..."
+        echo -e "[*] Changing country to $COUNTRY..."
         sudo iw reg set "$COUNTRY" > /dev/null 2>&1
     fi
 }
@@ -171,29 +175,97 @@ channel_check() {
     allowed_channels=$(echo "$channel_info" | cut -d'|' -f1)
     dfs_channels=$(echo "$channel_info" | cut -d'|' -f2)
 
+    # Get hardware disabled channels - FIXED VERSION
+    local disabled_channels=$(iw list 2>/dev/null | awk '
+    BEGIN { disabled_24 = ""; disabled_5 = "" }
+    /MHz.*\[.*\].*disabled/ {
+        # Extract channel number from brackets
+        if (match($0, /\[([0-9]+)\].*disabled/)) {
+            channel = substr($0, RSTART+1, RLENGTH-1)
+            channel = substr(channel, 1, index(channel, "]")-1)
+            
+            # Determine band based on frequency
+            if ($0 ~ /24[0-9][0-9]/) {
+                if (disabled_24 == "") disabled_24 = channel
+                else disabled_24 = disabled_24 "," channel
+            }
+            else if ($0 ~ /[0-9]{4}\.[0-9]/ && $0 !~ /24[0-9][0-9]/) {
+                if (disabled_5 == "") disabled_5 = channel
+                else disabled_5 = disabled_5 "," channel
+            }
+        }
+    }
+    END { print disabled_24 "|" disabled_5 }
+    ')
+    
+    local disabled_24=$(echo "$disabled_channels" | cut -d'|' -f1)
+    local disabled_5=$(echo "$disabled_channels" | cut -d'|' -f2)
+
     # Debug: Show what channels we found
     echo -e "${GREEN}[✓] Allowed channels:${RESET} $allowed_channels"
     echo -e "${RED}[!] DFS channels:${RESET} $dfs_channels"
-
-    # --- Randomize channel if not set ---
-    if [[ -z "$CHANNEL" ]]; then
-        echo "[*] No channel specified, randomizing channel..."
-        # Pick a random channel from the allowed ones
-        CHANNEL=$(echo "$allowed_channels" | tr ',' '\n' | shuf -n1)
-        echo "[*] Random channel selected: $CHANNEL"
+    
+    # Show disabled channels 
+    if [[ -n "$disabled_24" && -n "$disabled_5" ]]; then
+        echo -e "${RED}[!] Disabled Hardware channels:${RESET} $disabled_24,$disabled_5"
+    elif [[ -n "$disabled_24" ]]; then
+        echo -e "${RED}[!] Disabled Hardware channels:${RESET} $disabled_24"
+    elif [[ -n "$disabled_5" ]]; then
+        echo -e "${RED}[!] Disabled Hardware channels:${RESET} $disabled_5"
     fi
+    
+    
+    
+    
+    
+    # --- Manual channel selection - don't change, just validate ---
+    if [[ -n "$CHANNEL" ]]; then
+        echo "[*] Specified channel: $CHANNEL"
+        
+        # Check if manually selected channel is hardware disabled
+        if [[ -n "$disabled_24" && ",$disabled_24," == *",$CHANNEL,"* ]] || 
+           [[ -n "$disabled_5" && ",$disabled_5," == *",$CHANNEL,"* ]]; then
+            echo -e "${RED}[!] ERROR: Channel $CHANNEL is HARDWARE DISABLED on this adapterfor $COUNTRY!${RESET}"
+            echo "           You can change country if you want to use this channel."
+            cleanup
+            exit 1
+        fi
 
-    # Validate channel
-    #if ! echo "$allowed_channels" | grep -qw "$CHANNEL"; then
-    #    echo -e "${RED}[!] Channel $CHANNEL is not allowed in country: $COUNTRY${RESET}"
-    #    return 1
-    #fi
+        # Check if manually selected channel is DFS
+        if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
+            echo -e "${RED}[!] WARNING: Channel $CHANNEL is DFS (may not work in AP mode)${RESET}"
+            # Don't return error, just warn
+        fi
 
-    if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
-        echo -e "${RED}[!] Channel $CHANNEL is DFS (requires radar detection). Some Wi-Fi adapter blocks AP mode on them.${RESET}"
-        #return 1
+        #echo -e "${GREEN}[✓] Using manually specified channel: $CHANNEL${RESET}"
+        
+    # --- Randomized channel selection - filter out disabled channels ---
     else
-        echo -e "${GREEN}[✓] Channel $CHANNEL is valid and allowed in $COUNTRY.${RESET}"   
+        echo "[*] No channel specified, randomizing channel..."
+        
+        # Create list of available channels (allowed AND not disabled)
+        local available_channels=""
+        for ch in $(echo "$allowed_channels" | tr ',' ' '); do
+            # Skip if channel is hardware disabled
+            if [[ -n "$disabled_24" && ",$disabled_24," == *",$ch,"* ]]; then
+                continue
+            fi
+            if [[ -n "$disabled_5" && ",$disabled_5," == *",$ch,"* ]]; then
+                continue
+            fi
+            available_channels="$available_channels$ch,"
+        done
+        
+        available_channels=$(echo "$available_channels" | sed 's/,$//')
+        
+        if [[ -z "$available_channels" ]]; then
+            echo -e "${RED}[!] ERROR: No available channels after filtering hardware disabled ones!${RESET}"
+            return 1
+        fi
+        
+        # Pick random channel from available ones
+        CHANNEL=$(echo "$available_channels" | tr ',' '\n' | shuf -n1)
+        echo -e "${GREEN}[✓] Randomized channel selected: $CHANNEL${RESET}"
     fi
     
     return 0
@@ -354,7 +426,7 @@ release_ip() {
 # --- PREPARATION ---
 hardware_check || { echo -e "${RED}[!] Hardware check failed. Exiting.${RESET}"; exit 1; }
 country_check
-channel_check || { echo -e "${RED}[!] Channel check failed. Exiting.${RESET}"; exit 1; }
+channel_check
 install_dependencies
 check_oui
 
@@ -376,14 +448,14 @@ if (( CHANNEL >= 1 && CHANNEL <= 14 )); then
     HW_MODE="g"
     IEEE80211N="ieee80211n=1"
     IEEE80211AC=""
-    HT_CAPAB="[HT40+]"
-    VHT_CAPAB=""
+    #HT_CAPAB="[HT40+]"
+    #VHT_CAPAB=""
 elif (( CHANNEL >= 36 && CHANNEL <= 165 )); then
     HW_MODE="a"
     IEEE80211N="ieee80211n=1"
     IEEE80211AC="ieee80211ac=1"
-    HT_CAPAB="[HT40+]"
-    VHT_CAPAB="[VHT80]"
+    #HT_CAPAB="[HT40+]"
+    #VHT_CAPAB="[VHT80]"
 else
     echo -e "${RED}[!] Invalid channel: $CHANNEL in your region: $COUNTRY.${RESET}"
     exit 1
@@ -418,8 +490,8 @@ $IEEE80211N
 $IEEE80211AC
 ht_capab=$HT_CAPAB
 vht_capab=$VHT_CAPAB
-ieee80211d=1 # if you set 0 - Radar detection may be bypassed (illegal in some regions) may still be blocked on the driver level.
-ieee80211h=1 # if you set 0 - AP works on DFS channels that require radar detection (illegal in MOST regions) may still be blocked on the driver level.  
+ieee80211d=0 # if you set 0 - Radar detection may be bypassed (illegal in some regions) may still be blocked on the driver level.
+ieee80211h=0 # if you set 0 - AP works on DFS channels that require radar detection (illegal in MOST regions) may still be blocked on the driver level.  
 wmm_enabled=1
 ignore_broadcast_ssid=0
 EOF
