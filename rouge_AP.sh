@@ -1,13 +1,13 @@
 #!/bin/bash
-# Version 1.4 15/11/25 20:29
+# Version 1.5 16/11/25 00:05
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
 SSID="OOOpen"
-CHANNEL="4"    # Supports 2.4GHz and 5GHz. You can leave empty too.
+CHANNEL="8"    # Supports 2.4GHz and 5GHz. You can leave empty too.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY=""   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
+COUNTRY="US"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
                 
 
 WIFI_INTERFACE="wlan0"
@@ -77,17 +77,19 @@ hardware_check() {
     return 0
 }
 
-# --- CHANNEL CHECK ---
-channel_check() {
+
+
+# --- COUNTRY CHECK ---
+country_check() {
 
     # Get current regulatory domain
     local current_reg
     current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | sed 's/://')
-    echo -e "[*] Current regulatory domain (country): ${current_reg:-Not set}"
+    echo -e "[*] Current Country: ${current_reg:-Not set}"
 
     # --- Set default country if not specified ---
-    if [[ -z "$COUNTRY" ]]; then
-        echo "[*] No country specified, defaulting to 'US'"
+    if [[ -z "$COUNTRY" || "$COUNTRY" == "00" ]]; then
+        echo "[*] No country specified, defaulting to 'US'."
         COUNTRY="US"
     fi
 
@@ -96,43 +98,104 @@ channel_check() {
         echo -e "[*] Changing regulatory country to $COUNTRY..."
         sudo iw reg set "$COUNTRY" > /dev/null 2>&1
     fi
+}
 
-    # Get allowed channels
-    local allowed_channels dfs_channels allowed_channels_2_4
-    allowed_channels=$(iw list | grep -A10 "Frequencies:" | grep -oP '\[\K[0-9]+(?=\])')
-    dfs_channels=$(iw list | grep -A10 "Frequencies:" | grep "radar detection" | grep -oP '\[\K[0-9]+(?=\])')
 
-    # --- Randomize 2.4GHz channel if not set ---
+# --- CHANNEL CHECK ---
+channel_check() {
+    # Get allowed and DFS channels from regulatory domain
+    local reg_info=$(iw reg get)
+    
+    local channel_info=$(echo "$reg_info" | awk '
+    function freq_to_channel(freq, band) {
+        # 2.4 GHz
+        if (band == 1) {
+            if (freq >= 2412 && freq <= 2472) return int((freq - 2407)/5)
+            if (freq == 2484) return 14
+        }
+        # 5 GHz explicit mapping
+        if (band == 2) {  
+            if (freq == 4910) return 1;   if (freq == 4915) return 2;   if (freq == 4920) return 3
+            if (freq == 4925) return 4;   if (freq == 4930) return 5;   if (freq == 4935) return 6
+            if (freq == 4940) return 7;   if (freq == 4945) return 8;   if (freq == 4950) return 9
+            if (freq == 4955) return 10;  if (freq == 4960) return 11;  if (freq == 4965) return 12
+            if (freq == 4970) return 13;  if (freq == 4975) return 14;  if (freq == 4980) return 15
+            if (freq == 4985) return 16;  if (freq == 4990) return 17;  if (freq == 5170) return 34
+            if (freq == 5180) return 36;  if (freq == 5190) return 38;  if (freq == 5200) return 40
+            if (freq == 5210) return 42;  if (freq == 5220) return 44;  if (freq == 5230) return 46
+            if (freq == 5240) return 48;  if (freq == 5260) return 52;  if (freq == 5280) return 56
+            if (freq == 5300) return 60;  if (freq == 5320) return 64;  if (freq == 5340) return 68
+            if (freq == 5480) return 96;  if (freq == 5500) return 100; if (freq == 5520) return 104
+            if (freq == 5540) return 108; if (freq == 5560) return 112; if (freq == 5580) return 116
+            if (freq == 5600) return 120; if (freq == 5620) return 124; if (freq == 5640) return 128
+            if (freq == 5660) return 132; if (freq == 5680) return 136; if (freq == 5700) return 140
+            if (freq == 5720) return 144; if (freq == 5745) return 149; if (freq == 5765) return 153
+            if (freq == 5785) return 157; if (freq == 5805) return 161; if (freq == 5825) return 165
+            if (freq == 5845) return 169; if (freq == 5865) return 173 
+        }
+        return ""
+    }
+    BEGIN { allowed = ""; dfs = "" }
+    /\([0-9]+ - [0-9]+/ {
+        match($0, /\(([0-9]+) - ([0-9]+)/, m)
+        start = m[1]; end = m[2]
+        rest = $0; sub(/^[^)]*\) *,? */, "", rest); gsub(/^ +| +$/, "", rest)
+        split(rest, restr_array, ",")
+        restrictions = ""
+        for (i in restr_array) {
+            r = restr_array[i]
+            gsub(/^ +| +$/, "", r); gsub(/^\(|\)$/, "", r)
+            if (r !~ /^N\/A/ && r !~ /0 ms/ && r !~ /^[0-9]+$/) {
+                if (restrictions == "") restrictions = r
+                else restrictions = restrictions " - " r
+            }
+        }
+        if (start >= 2400 && end <= 2500) { band = 1; step=5 }
+        else if (start >= 4910 && end <= 5865) { band = 2; step=5 }
+        else next
+        for (f = start; f <= end; f += step) {
+            ch = freq_to_channel(f, band)
+            if (ch == "") continue
+            if ((band == 1 || band == 2) && restrictions !~ /DFS/) {
+                if (allowed == "") allowed = ch; else allowed = allowed "," ch
+            }
+            if ((band == 1 || band == 2) && restrictions ~ /DFS/) {
+                if (dfs == "") dfs = ch; else dfs = dfs "," ch
+            }
+        }
+    }
+    END { print allowed "|" dfs }
+    ')
+    
+    # Split the result into allowed_channels and dfs_channels
+    allowed_channels=$(echo "$channel_info" | cut -d'|' -f1)
+    dfs_channels=$(echo "$channel_info" | cut -d'|' -f2)
+
+    # Debug: Show what channels we found
+    echo -e "${GREEN}[✓] Allowed channels:${RESET} $allowed_channels"
+    echo -e "${RED}[!] DFS channels:${RESET} $dfs_channels"
+
+    # --- Randomize channel if not set ---
     if [[ -z "$CHANNEL" ]]; then
-        echo "[*] No channel specified, randomizing 2.4GHz channel..."
-
-        # Get allowed 2.4GHz channels for this country (non-DFS)
-        allowed_channels_2_4=$(iw list | grep -A10 "Frequencies:" \
-                          | grep -v "radar detection" \
-                          | grep -oP '\[\K[0-9]+(?=\])' \
-                          | awk '$1>=1 && $1<=14') 
-        if [[ -z "$allowed_channels_2_4" ]]; then
-            echo "[!] Could not determine allowed 2.4GHz channels. Defaulting to 6."
-            CHANNEL=6
-        else
-            # Pick a random channel from the allowed ones
-            CHANNEL=$(echo "$allowed_channels_2_4" | shuf -n1)
-        fi
+        echo "[*] No channel specified, randomizing channel..."
+        # Pick a random channel from the allowed ones
+        CHANNEL=$(echo "$allowed_channels" | tr ',' '\n' | shuf -n1)
         echo "[*] Random channel selected: $CHANNEL"
     fi
 
     # Validate channel
-    if ! echo "$allowed_channels" | grep -qw "$CHANNEL"; then
-        echo -e "${RED}[!] Channel $CHANNEL is not allowed in domain: $COUNTRY${RESET}"
-        return 1
-    fi
+    #if ! echo "$allowed_channels" | grep -qw "$CHANNEL"; then
+    #    echo -e "${RED}[!] Channel $CHANNEL is not allowed in country: $COUNTRY${RESET}"
+    #    return 1
+    #fi
 
     if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
-        echo -e "${RED}[!] Channel $CHANNEL is DFS (requires radar detection). Stopping.${RESET}"
-        return 1
+        echo -e "${RED}[!] Channel $CHANNEL is DFS (requires radar detection). Some Wi-Fi adapter blocks AP mode on them.${RESET}"
+        #return 1
+    else
+        echo -e "${GREEN}[✓] Channel $CHANNEL is valid and allowed in $COUNTRY.${RESET}"   
     fi
-
-    echo -e "${GREEN}[✓] Channel $CHANNEL is valid and allowed in "$COUNTRY".${RESET}"
+    
     return 0
 }
 
@@ -290,6 +353,7 @@ release_ip() {
 
 # --- PREPARATION ---
 hardware_check || { echo -e "${RED}[!] Hardware check failed. Exiting.${RESET}"; exit 1; }
+country_check
 channel_check || { echo -e "${RED}[!] Channel check failed. Exiting.${RESET}"; exit 1; }
 install_dependencies
 check_oui
@@ -321,7 +385,7 @@ elif (( CHANNEL >= 36 && CHANNEL <= 165 )); then
     HT_CAPAB="[HT40+]"
     VHT_CAPAB="[VHT80]"
 else
-    echo -e "${RED}Invalid channel number: $CHANNEL${RESET}"
+    echo -e "${RED}[!] Invalid channel: $CHANNEL in your region: $COUNTRY.${RESET}"
     exit 1
 fi
 
@@ -381,7 +445,8 @@ while [ $elapsed -lt $timeout ]; do
     if grep -qi -E "AP-DISABLED|error|invalid" /tmp/hostapd.log; then
         echo -e "${RED}[!] Hostapd failed to start.${RESET}"
         echo -e "${RED}--- Hostapd log ---${RESET}"
-        grep -i -E "AP-DISABLED|Could not select|Hardware does not support|Invalid|error|Failed" /tmp/hostapd.log
+        #grep -i -E "AP-DISABLED|Could not select|Hardware does not support|Invalid|error|Failed" /tmp/hostapd.log
+        awk '{print "\t"$0}' /tmp/hostapd.log
         kill $HAPD_PID 2>/dev/null
         cleanup
         exit 1
@@ -414,7 +479,7 @@ sudo iptables -A FORWARD -i $LAN_INTERFACE -o $WIFI_INTERFACE -m state --state R
 sudo iptables -A FORWARD -i $WIFI_INTERFACE -o $LAN_INTERFACE -j ACCEPT
 sudo sysctl -w net.ipv4.ip_forward=1 > /dev/null
 
-echo -e "${GREEN}[✓] AP ${ORANGE}'$SSID'${RESET} ${GREEN}started on Channel ${ORANGE}'$CHANNEL'.${RESET}"
+echo -e "\n${GREEN}[✓] AP ${ORANGE}'$SSID'${RESET} ${GREEN}started on Channel ${ORANGE}'$CHANNEL'.${RESET}"
 echo -e "[*] Waiting for clients to connect:\n\n"
 
 # --- LOGGING ---
