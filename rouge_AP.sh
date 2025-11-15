@@ -1,10 +1,10 @@
 #!/bin/bash
-# Version 1.2 15/11/25 03:26
+# Version 1.3 15/11/25 13:20
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
-SSID="Open WiFi"
+SSID="OOOpen"
 CHANNEL="6"    # Supports 2.4GHz and 5GHz. You can leave empty
 AP_MAC=""      # You can leave empty
 COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty.
@@ -25,20 +25,53 @@ GREEN="\e[32m"
 RED="\e[31m"
 YELLOW="\e[33m"  
 BLUE="\e[34m"
-NC="\e[0m"  # No Color
+ORANGE=$'\033[1;33m'
+RESET="\e[0m"  # No Color
+
+
+
+# Check if the script is run as root
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Please run this script as root or with sudo.${RESET}"
+    exit 1
+fi
+
+
+install_dependencies() {
+
+    DEPS=(hostapd dnsmasq iw iproute2 macchanger wget iptables procps)
+    MISSING=()
+
+    # Detect missing packages
+    for pkg in "${DEPS[@]}"; do
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+            echo -e "${RED}[!] Missing: $pkg${RESET}"
+            MISSING+=("$pkg")
+        fi
+    done
+
+    # Install only missing ones
+    if [ ${#MISSING[@]} -gt 0 ]; then
+        echo -e "\n[*] Installing missing packages: ${MISSING[*]}\n"
+        sudo apt update -y > /dev/null 2>&1
+        sudo apt install -y "${MISSING[@]}"
+    else
+        echo -e "${GREEN}[✓] All dependencies already installed.${RESET}"
+    fi
+}
 
 
 # --- HARDWARE CHECK ---
 hardware_check() {
     if ! ip link show "$WIFI_INTERFACE" > /dev/null 2>&1; then
-        echo -e "${RED}[!] Interface $WIFI_INTERFACE not found${NC}"
+        echo -e "${RED}[!] Interface $WIFI_INTERFACE not found${RESET}"
         return 1
     fi
 
     if iw list 2>/dev/null | grep -q "AP"; then
-        echo -e "${GREEN}[✓] Interface supports AP mode${NC}"
+        echo -e "${GREEN}[✓] Interface supports AP mode${RESET}"
     else
-        echo -e "${RED}[!] Interface may not support AP mode${NC}"
+        echo -e "${RED}[!] Interface may not support AP mode${RESET}"
         return 1
     fi
     return 0
@@ -71,21 +104,19 @@ channel_check() {
 
     # Validate channel
     if ! echo "$allowed_channels" | grep -qw "$CHANNEL"; then
-        echo -e "${RED}[!] Channel $CHANNEL is not allowed in country: $COUNTRY${NC}"
+        echo -e "${RED}[!] Channel $CHANNEL is not allowed in country: $COUNTRY${RESET}"
         return 1
     fi
 
     if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
-        echo -e "${RED}[!] Channel $CHANNEL is DFS (requires radar detection). Stopping.${NC}"
+        echo -e "${RED}[!] Channel $CHANNEL is DFS (requires radar detection). Stopping.${RESET}"
         return 1
     fi
 
-    echo -e "${GREEN}[✓] Channel $CHANNEL is valid and allowed in "$COUNTRY".${NC}"
+    echo -e "${GREEN}[✓] Channel $CHANNEL is valid and allowed in "$COUNTRY".${RESET}"
     return 0
 }
 
-
-hardware_check || { echo -e "${RED}[!] Hardware check failed. Exiting.${NC}"; exit 1; }
 
 # --- Randomize 2.4GHz channel if not set ---
 if [[ -z "$CHANNEL" ]]; then
@@ -105,7 +136,6 @@ if [[ -z "$CHANNEL" ]]; then
     fi
     echo "[*] Random channel selected: $CHANNEL"
 fi
-channel_check || { echo -e "${RED}[!] Channel check failed. Exiting.${NC}"; exit 1; }
 
 
 
@@ -124,7 +154,7 @@ cleanup() {
     sudo iw dev $WIFI_INTERFACE set type managed 2>/dev/null
     sudo ip link set $WIFI_INTERFACE up
     sudo systemctl start NetworkManager
-    echo -e "${GREEN}[✓] Cleanup complete - Wi-Fi interface restored to normal mode${NC}"
+    echo -e "${GREEN}[✓] Cleanup complete - Wi-Fi interface restored to normal mode${RESET}"
     exit 0
 }
 
@@ -146,7 +176,7 @@ check_oui() {
     if [ ! -f "$OUI_FILE" ]; then
         echo -e "[*] Downloading OUI vendor file..."
         wget -q https://raw.githubusercontent.com/idoCo10/OUI-list/main/oui.txt -O "$OUI_FILE"
-        [[ ! -f "$OUI_FILE" ]] && { echo -e "${RED}Failed to download OUI vendor file.${NC}"; exit 1; }
+        [[ ! -f "$OUI_FILE" ]] && { echo -e "${RED}Failed to download OUI vendor file.${RESET}"; exit 1; }
     fi
 }
 
@@ -197,7 +227,7 @@ set_ap_mac() {
 
         # Output
         echo -e "      Permanent MAC:  $perm_mac   ($perm_vendor)"
-        echo -e "${GREEN}    ✓ Randomized MAC: $rand_mac   ($rand_vendor)${NC}"
+        echo -e "${GREEN}    ✓ Randomized MAC: $rand_mac   ($rand_vendor)${RESET}"
         return
     fi
 
@@ -216,8 +246,6 @@ set_ap_mac() {
 
     echo "[*] Using provided MAC address: $new_mac ($vendor)"
 }
-
-
 
 
 # --- Wait for DHCP lease to appear (max 30s) ---
@@ -260,7 +288,14 @@ release_ip() {
     fi
 }
 
+
+
+
+
 # --- PREPARATION ---
+hardware_check || { echo -e "${RED}[!] Hardware check failed. Exiting.${RESET}"; exit 1; }
+channel_check || { echo -e "${RED}[!] Channel check failed. Exiting.${RESET}"; exit 1; }
+install_dependencies
 check_oui
 
 sudo systemctl stop NetworkManager
@@ -287,7 +322,7 @@ elif (( CHANNEL >= 36 && CHANNEL <= 165 )); then
     HT_CAPAB="[HT40+]"
     VHT_CAPAB="[VHT80]"
 else
-    echo -e "${RED}Invalid channel number: $CHANNEL${NC}"
+    echo -e "${RED}Invalid channel number: $CHANNEL${RESET}"
     exit 1
 fi
 
@@ -352,8 +387,8 @@ sudo iptables -A FORWARD -i $LAN_INTERFACE -o $WIFI_INTERFACE -m state --state R
 sudo iptables -A FORWARD -i $WIFI_INTERFACE -o $LAN_INTERFACE -j ACCEPT
 sudo sysctl -w net.ipv4.ip_forward=1 > /dev/null
 
-echo -e "${GREEN}[✓] AP '$SSID' started on Channel '$CHANNEL'.${NC}"
-echo -e "[*] Waiting for clients:\n\n"
+echo -e "${GREEN}[✓] AP ${ORANGE}'$SSID'${RESET} ${GREEN}started on Channel ${ORANGE}'$CHANNEL'.${RESET}"
+echo -e "[*] Waiting for clients to connect:\n\n"
 
 # --- LOGGING ---
 touch $LOG_FILE
@@ -376,7 +411,7 @@ while true; do
             printf -v MSG "[%s] CONNECTED:    Name: %-9s | IP: %-13s | MAC: %17s | OUI: %s" \
             "$TIMESTAMP" "$NAME" "$IP" "$MAC" "$OUI"
 
-            echo -e "${GREEN}${MSG}${NC}"
+            echo -e "${GREEN}${MSG}${RESET}"
             echo "$MSG" >> "$LOG_FILE"
             CLIENTS[$MAC]=1
         fi
@@ -392,7 +427,7 @@ while true; do
             printf -v MSG "[%s] DISCONNECTED: Name: %-9s | IP: %-13s | MAC: %17s | OUI: %s" \
             "$TIMESTAMP" "$NAME" "$IP" "$MAC" "$OUI"
 
-            echo -e "${RED}${MSG}${NC}"
+            echo -e "${RED}${MSG}${RESET}"
             echo "$MSG" >> "$LOG_FILE"
             #release_ip "$MAC"
             unset CLIENTS[$MAC]
