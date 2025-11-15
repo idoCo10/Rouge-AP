@@ -1,13 +1,13 @@
 #!/bin/bash
-# Version 1.3 15/11/25 13:20
+# Version 1.4 15/11/25 20:29
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
 SSID="OOOpen"
-CHANNEL="6"    # Supports 2.4GHz and 5GHz. You can leave empty too.
+CHANNEL="4"    # Supports 2.4GHz and 5GHz. You can leave empty too.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
+COUNTRY=""   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
                 
 
 WIFI_INTERFACE="wlan0"
@@ -77,18 +77,18 @@ hardware_check() {
     return 0
 }
 
-# --- CHANNEL CHECK (USES GLOBAL VARIABLES) ---
+# --- CHANNEL CHECK ---
 channel_check() {
 
     # Get current regulatory domain
     local current_reg
     current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | sed 's/://')
-    echo -e "[*] Current regulatory country: ${current_reg:-Not set}"
+    echo -e "[*] Current regulatory domain (country): ${current_reg:-Not set}"
 
     # --- Set default country if not specified ---
     if [[ -z "$COUNTRY" ]]; then
-        echo "[*] No country specified, defaulting to '00' (world regulatory domain)"
-        COUNTRY="00"
+        echo "[*] No country specified, defaulting to 'US'"
+        COUNTRY="US"
     fi
 
     # Set country only if different
@@ -98,13 +98,32 @@ channel_check() {
     fi
 
     # Get allowed channels
-    local allowed_channels dfs_channels
+    local allowed_channels dfs_channels allowed_channels_2_4
     allowed_channels=$(iw list | grep -A10 "Frequencies:" | grep -oP '\[\K[0-9]+(?=\])')
     dfs_channels=$(iw list | grep -A10 "Frequencies:" | grep "radar detection" | grep -oP '\[\K[0-9]+(?=\])')
 
+    # --- Randomize 2.4GHz channel if not set ---
+    if [[ -z "$CHANNEL" ]]; then
+        echo "[*] No channel specified, randomizing 2.4GHz channel..."
+
+        # Get allowed 2.4GHz channels for this country (non-DFS)
+        allowed_channels_2_4=$(iw list | grep -A10 "Frequencies:" \
+                          | grep -v "radar detection" \
+                          | grep -oP '\[\K[0-9]+(?=\])' \
+                          | awk '$1>=1 && $1<=14') 
+        if [[ -z "$allowed_channels_2_4" ]]; then
+            echo "[!] Could not determine allowed 2.4GHz channels. Defaulting to 6."
+            CHANNEL=6
+        else
+            # Pick a random channel from the allowed ones
+            CHANNEL=$(echo "$allowed_channels_2_4" | shuf -n1)
+        fi
+        echo "[*] Random channel selected: $CHANNEL"
+    fi
+
     # Validate channel
     if ! echo "$allowed_channels" | grep -qw "$CHANNEL"; then
-        echo -e "${RED}[!] Channel $CHANNEL is not allowed in country: $COUNTRY${RESET}"
+        echo -e "${RED}[!] Channel $CHANNEL is not allowed in domain: $COUNTRY${RESET}"
         return 1
     fi
 
@@ -118,37 +137,16 @@ channel_check() {
 }
 
 
-# --- Randomize 2.4GHz channel if not set ---
-if [[ -z "$CHANNEL" ]]; then
-    echo "[*] No channel specified, randomizing 2.4GHz channel..."
-
-    # Get allowed 2.4GHz channels for this country (non-DFS)
-    allowed_channels=$(iw list | grep -A10 "Frequencies:" \
-                      | grep -v "radar detection" \
-                      | grep -oP '\[\K[0-9]+(?=\])' \
-                      | awk '$1>=1 && $1<=14')  # limit to 2.4GHz
-    if [[ -z "$allowed_channels" ]]; then
-        echo "[!] Could not determine allowed 2.4GHz channels. Defaulting to 6."
-        CHANNEL=6
-    else
-        # Pick a random channel from the allowed ones
-        CHANNEL=$(echo "$allowed_channels" | shuf -n1)
-    fi
-    echo "[*] Random channel selected: $CHANNEL"
-fi
-
-
-
 # --- CLEANUP FUNCTION ---
 cleanup() {
-    echo -e "\n\n[*] Stopping AP..."
+    echo -e "\n[*] Stopping AP..."
     sudo pkill hostapd
     sudo rm -f /tmp/hostapd.conf
     sudo pkill dnsmasq
     sudo rm -f /var/lib/misc/dnsmasq.leases
-    sudo iptables -t nat -D POSTROUTING -o $LAN_INTERFACE -j MASQUERADE
-    sudo iptables -D FORWARD -i $LAN_INTERFACE -o $WIFI_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT
-    sudo iptables -D FORWARD -i $WIFI_INTERFACE -o $LAN_INTERFACE -j ACCEPT
+    sudo iptables -t nat -D POSTROUTING -o $LAN_INTERFACE -j MASQUERADE 2>/dev/null
+    sudo iptables -D FORWARD -i $LAN_INTERFACE -o $WIFI_INTERFACE -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+    sudo iptables -D FORWARD -i $WIFI_INTERFACE -o $LAN_INTERFACE -j ACCEPT 2>/dev/null
     sudo ip link set $WIFI_INTERFACE down
     sudo ip addr flush dev $WIFI_INTERFACE
     sudo iw dev $WIFI_INTERFACE set type managed 2>/dev/null
@@ -290,8 +288,6 @@ release_ip() {
 
 
 
-
-
 # --- PREPARATION ---
 hardware_check || { echo -e "${RED}[!] Hardware check failed. Exiting.${RESET}"; exit 1; }
 channel_check || { echo -e "${RED}[!] Channel check failed. Exiting.${RESET}"; exit 1; }
@@ -307,6 +303,9 @@ set_ap_mac
 sudo iw dev $WIFI_INTERFACE set type ap 2>/dev/null
 sudo ip addr add $AP_IP/24 dev $WIFI_INTERFACE
 sudo ip link set $WIFI_INTERFACE up
+
+
+
 
 # --- DETERMINE BAND & CAPABILITIES BASED ON CHANNEL ---
 if (( CHANNEL >= 1 && CHANNEL <= 14 )); then
@@ -345,20 +344,20 @@ CENTER_FREQ=$(get_center_freq $CHANNEL)
 
 cat <<EOF > $HOSTAPD_CONF
 interface=$WIFI_INTERFACE
-driver=nl80211
 ssid=$SSID
-hw_mode=$HW_MODE
 channel=$CHANNEL
-ignore_broadcast_ssid=0
+country_code=$COUNTRY
+auth_algs=1   # open wifi
+driver=nl80211
+hw_mode=$HW_MODE
 $IEEE80211N
 $IEEE80211AC
 ht_capab=$HT_CAPAB
 vht_capab=$VHT_CAPAB
-country_code=$COUNTRY
-ieee80211d=1
-ieee80211h=1
-auth_algs=1  # open wifi
+ieee80211d=1 # if you set 0 - Radar detection may be bypassed (illegal in some regions) may still be blocked on the driver level.
+ieee80211h=1 # if you set 0 - AP works on DFS channels that require radar detection (illegal in MOST regions) may still be blocked on the driver level.  
 wmm_enabled=1
+ignore_broadcast_ssid=0
 EOF
 
 # Only add VHT settings for 5GHz
@@ -367,8 +366,36 @@ if (( CHANNEL >= 36 && CHANNEL <= 165 )); then
     echo "vht_oper_centr_freq_seg0_idx=$CENTER_FREQ" >> $HOSTAPD_CONF
 fi
 
+
+# --- Start hostapd ---
+sudo hostapd $HOSTAPD_CONF > /tmp/hostapd.log 2>&1 & 
+HAPD_PID=$!
+
 echo "[*] Starting hostapd..."
-sudo hostapd $HOSTAPD_CONF > /dev/null 2>&1 &
+timeout=15   # max seconds to wait
+elapsed=0
+while [ $elapsed -lt $timeout ]; do
+    if grep -q "AP-ENABLED" /tmp/hostapd.log; then
+        break
+    fi
+    if grep -qi -E "AP-DISABLED|error|invalid" /tmp/hostapd.log; then
+        echo -e "${RED}[!] Hostapd failed to start.${RESET}"
+        echo -e "${RED}--- Hostapd log ---${RESET}"
+        grep -i -E "AP-DISABLED|Could not select|Hardware does not support|Invalid|error|Failed" /tmp/hostapd.log
+        kill $HAPD_PID 2>/dev/null
+        cleanup
+        exit 1
+    fi
+    sleep 1
+    ((elapsed++))
+done
+
+# Final check after waiting
+if ! grep -q "AP-ENABLED" /tmp/hostapd.log; then
+    echo -e "${RED}[!] Hostapd did not start within $timeout seconds. Check /tmp/hostapd.log${RESET}"
+    cleanup
+    exit 1
+fi
 
 
 # --- DNSMASQ CONFIG ---
