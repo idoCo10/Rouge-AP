@@ -5,9 +5,9 @@ UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
 SSID="OOOpen"
-CHANNEL="6"    # Supports 2.4GHz and 5GHz. You can leave empty
-AP_MAC=""      # You can leave empty
-COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty.
+CHANNEL="6"    # Supports 2.4GHz and 5GHz. You can leave empty too.
+AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
+COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
                 
 
 WIFI_INTERFACE="wlan0"
