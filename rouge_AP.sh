@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version 1.5 16/11/25 02:30
+# Version 1.6 16/11/25 02:50
 
 UN=${SUDO_USER:-$(whoami)}
 
@@ -7,7 +7,7 @@ UN=${SUDO_USER:-$(whoami)}
 SSID="OOOpen"
 CHANNEL=""    # Supports 2.4GHz and 5GHz. You can leave empty too.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY="US"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
+COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
                 
 
 # Check US channels: 42,169,34,4,
@@ -135,7 +135,7 @@ channel_check() {
             if (freq == 4940) return 7;   if (freq == 4945) return 8;   if (freq == 4950) return 9
             if (freq == 4955) return 10;  if (freq == 4960) return 11;  if (freq == 4965) return 12
             if (freq == 4970) return 13;  if (freq == 4975) return 14;  if (freq == 4980) return 15
-            if (freq == 4985) return 16;  if (freq == 4990) return 17
+            if (freq == 4985) return 16;  if (freq == 4990) return 17;  if (freq == 5170) return 34
             if (freq == 5180) return 36;  if (freq == 5190) return 38;  if (freq == 5200) return 40
             if (freq == 5210) return 42;  if (freq == 5220) return 44;  if (freq == 5230) return 46
             if (freq == 5240) return 48;  if (freq == 5260) return 52;  if (freq == 5280) return 56
