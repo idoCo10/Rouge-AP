@@ -1,14 +1,17 @@
 #!/bin/bash
-# Version 1.5 16/11/25 02:00
+# Version 1.5 16/11/25 02:30
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
 SSID="OOOpen"
-CHANNEL="40"    # Supports 2.4GHz and 5GHz. You can leave empty too.
+CHANNEL=""    # Supports 2.4GHz and 5GHz. You can leave empty too.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
+COUNTRY="US"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
                 
+
+# Check US channels: 42,169,34,4,
+# TH: 38,46,
 
 WIFI_INTERFACE="wlan0"
 LAN_INTERFACE="eth0"   # Internet
@@ -86,14 +89,22 @@ country_check() {
     current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | sed 's/://')
     echo -e "[*] Current Country: ${current_reg:-Not set}"
 
-    # If COUNTRY is empty AND current_reg is 00, set COUNTRY = US
-    if [[ -z "$COUNTRY" && "$current_reg" == "00" ]]; then
-        echo "[*] No country specified and current is 00, setting to 'US'."
-        COUNTRY="US"
+    # If COUNTRY is empty, set it based on current_reg
+    if [[ -z "$COUNTRY" ]]; then
+        if [[ "$current_reg" == "00" ]]; then
+            echo "[*] Regulatory domain is 00, setting country to 'US'."
+            COUNTRY="US"
+        elif [[ -n "$current_reg" ]]; then
+            COUNTRY="$current_reg"
+        else
+            echo "[*] No country specified and cannot detect current, setting to 'US'."
+            COUNTRY="US"
+        fi
     fi
 
-    # If current_reg is US, set COUNTRY to US (silently)
-    if [[ "$current_reg" == "US" && -z "$COUNTRY" ]]; then
+    # If COUNTRY is explicitly set to "00", change it to US
+    if [[ "$COUNTRY" == "00" ]]; then
+        echo "[!] hostapd won't accept region '00'. changing to 'US'."
         COUNTRY="US"
     fi
 
@@ -124,7 +135,7 @@ channel_check() {
             if (freq == 4940) return 7;   if (freq == 4945) return 8;   if (freq == 4950) return 9
             if (freq == 4955) return 10;  if (freq == 4960) return 11;  if (freq == 4965) return 12
             if (freq == 4970) return 13;  if (freq == 4975) return 14;  if (freq == 4980) return 15
-            if (freq == 4985) return 16;  if (freq == 4990) return 17;  if (freq == 5170) return 34
+            if (freq == 4985) return 16;  if (freq == 4990) return 17
             if (freq == 5180) return 36;  if (freq == 5190) return 38;  if (freq == 5200) return 40
             if (freq == 5210) return 42;  if (freq == 5220) return 44;  if (freq == 5230) return 46
             if (freq == 5240) return 48;  if (freq == 5260) return 52;  if (freq == 5280) return 56
@@ -207,11 +218,11 @@ channel_check() {
     
     # Show disabled channels 
     if [[ -n "$disabled_24" && -n "$disabled_5" ]]; then
-        echo -e "${RED}[!] Disabled Hardware channels:${RESET} $disabled_24,$disabled_5"
+        echo -e "${RED}[!] Disabled Hardware channels:${RESET} 2.4GHz - $disabled_24. 5GHz - $disabled_5"
     elif [[ -n "$disabled_24" ]]; then
-        echo -e "${RED}[!] Disabled Hardware channels:${RESET} $disabled_24"
+        echo -e "${RED}[!] Disabled Hardware channels:${RESET} 2.4GHz - $disabled_24"
     elif [[ -n "$disabled_5" ]]; then
-        echo -e "${RED}[!] Disabled Hardware channels:${RESET} $disabled_5"
+        echo -e "${RED}[!] Disabled Hardware channels:${RESET} 5GHz - $disabled_5"
     fi
     
     
@@ -450,12 +461,12 @@ if (( CHANNEL >= 1 && CHANNEL <= 14 )); then
     IEEE80211AC=""
     #HT_CAPAB="[HT40+]"
     #VHT_CAPAB=""
-elif (( CHANNEL >= 36 && CHANNEL <= 165 )); then
+elif (( CHANNEL >= 36 && CHANNEL <= 169 )); then
     HW_MODE="a"
     IEEE80211N="ieee80211n=1"
     IEEE80211AC="ieee80211ac=1"
-    #HT_CAPAB="[HT40+]"
-    #VHT_CAPAB="[VHT80]"
+    HT_CAPAB="[HT40+]"
+    VHT_CAPAB="[VHT80]"
 else
     echo -e "${RED}[!] Invalid channel: $CHANNEL in your region: $COUNTRY.${RESET}"
     exit 1
@@ -490,8 +501,8 @@ $IEEE80211N
 $IEEE80211AC
 ht_capab=$HT_CAPAB
 vht_capab=$VHT_CAPAB
-ieee80211d=0 # if you set 0 - Radar detection may be bypassed (illegal in some regions) may still be blocked on the driver level.
-ieee80211h=0 # if you set 0 - AP works on DFS channels that require radar detection (illegal in MOST regions) may still be blocked on the driver level.  
+ieee80211d=1 # if you set 0 - Radar detection may be bypassed (illegal in some regions) may still be blocked on the driver level.
+ieee80211h=1 # if you set 0 - AP works on DFS channels that require radar detection (illegal in MOST regions) may still be blocked on the driver level.  
 wmm_enabled=1
 ignore_broadcast_ssid=0
 EOF
