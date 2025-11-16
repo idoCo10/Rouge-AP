@@ -1,11 +1,11 @@
 #!/bin/bash
-# Version 2.0 17/11/25 01:30
+# Version 2.0 17/11/25 02:00
 
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
-SSID="Home"
+SSID=""    # Default is "Open WiFi" if you leave SSID empty.
 CHANNEL=""    # Supports 2.4GHz and 5GHz. You can leave empty and the script will randomize channel.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
 COUNTRY=""   # set your country here. You can leave empty, default is US.
@@ -59,8 +59,8 @@ install_dependencies() {
         echo -e "\n[*] Installing missing packages: ${MISSING[*]}\n"
         sudo apt update -y > /dev/null 2>&1
         sudo apt install -y "${MISSING[@]}"
-    else
-        echo -e "${GREEN}[✓] All dependencies already installed.${RESET}"
+    #else
+        #echo -e "${GREEN}[✓] All dependencies already installed.${RESET}"
     fi
 }
 
@@ -88,7 +88,7 @@ country_check() {
     # Get current regulatory domain
     local current_reg
     current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | sed 's/://')
-    echo -e "[*] Current Country: ${current_reg:-Not set}"
+    echo -e "[*] Current Country: ${current_reg:-Not set}."
 
     # If COUNTRY is empty, set it based on current_reg
     if [[ -z "$COUNTRY" ]]; then
@@ -204,28 +204,28 @@ channel_check() {
     echo -e "[*] Channel information in $COUNTRY:"
     
     # Allowed channels
-    echo -e "\n${GREEN}[✓] Allowed channels:${RESET}"
-    echo -e "  2.4GHz: $(format_channels allowed_24)"
-    echo -e "  5GHz:   $(format_channels allowed_5)"
-    echo -e "  6GHz:   $(format_channels allowed_6)"
+    echo -e "    ${GREEN}[✓] Allowed channels:${RESET}"
+    echo -e "        2.4GHz: $(format_channels allowed_24)"
+    echo -e "        5GHz:   $(format_channels allowed_5)"
+    echo -e "        6GHz:   $(format_channels allowed_6)"
 
     # DFS channels
-    echo -e "\n${YELLOW}DFS (radar detection) channels:${RESET}"
-    echo -e "  2.4GHz: $(format_channels dfs_24)"
-    echo -e "  5GHz:   $(format_channels dfs_5)"
-    echo -e "  6GHz:   $(format_channels dfs_6)"
+    echo -e "    ${YELLOW}[!] DFS (radar detection) channels:${RESET}"
+    echo -e "        2.4GHz: $(format_channels dfs_24)"
+    echo -e "        5GHz:   $(format_channels dfs_5)"
+    echo -e "        6GHz:   $(format_channels dfs_6)"
 
     # Disabled channels
-    echo -e "\n${RED}Disabled channels:${RESET}"
-    echo -e "  2.4GHz: $(format_channels disabled_24)"
-    echo -e "  5GHz:   $(format_channels disabled_5)"
-    echo -e "  6GHz:   $(format_channels disabled_6)"
+    echo -e "    ${RED}[!] Disabled channels:${RESET}"
+    echo -e "        2.4GHz: $(format_channels disabled_24)"
+    echo -e "        5GHz:   $(format_channels disabled_5)"
+    echo -e "        6GHz:   $(format_channels disabled_6)"
 
     # No IR channels
-    echo -e "\n${BLUE}No IR channels:${RESET}"
-    echo -e "  2.4GHz: $(format_channels noir_24)"
-    echo -e "  5GHz:   $(format_channels noir_5)"
-    echo -e "  6GHz:   $(format_channels noir_6)"
+    echo -e "    ${BLUE}[!] No IR channels:${RESET}"
+    echo -e "        2.4GHz: $(format_channels noir_24)"
+    echo -e "        5GHz:   $(format_channels noir_5)"
+    echo -e "        6GHz:   $(format_channels noir_6)"
 
     
 
@@ -269,6 +269,7 @@ else
 
 	# Sort numerically (optional)
 	available_channels=($(printf '%s\n' "${available_channels[@]}" | sort -n))
+	
 	#echo -e "\n\nChannels Pool: ${available_channels[*]}\n\n"
 
 	# Pick a random channel
@@ -509,10 +510,12 @@ else
     cleanup
 fi
 
+SSID=${SSID:-Open WiFi} # use "Open WiFi" if $SSID is empty
+
 # Create hostapd configuration
 cat <<EOF > $HOSTAPD_CONF
 interface=$WIFI_INTERFACE
-ssid=$SSID
+ssid=$SSID 
 channel=$CHANNEL
 country_code=$COUNTRY
 auth_algs=1
