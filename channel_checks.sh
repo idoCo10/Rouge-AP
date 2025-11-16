@@ -1,65 +1,51 @@
 #!/usr/bin/env bash
 
-
 current_reg=$(iw reg get 2>/dev/null | grep "country" | head -1 | awk '{print $2}' | sed 's/://')
 echo -e "Current Country: ${current_reg:-Not set}\n"
 echo -e "Available Channels:"
+
 iw reg get | awk '
 
 function freq_to_channel(freq, band) {
-    # 900 MHz band
-    if (band == 0) {
-        # 900MHz channels are typically 1:1 mapping in some systems
-        # For display purposes, we can use the frequency directly or calculate offset
-        if (freq >= 902 && freq <= 928) return int((freq - 902) / 2) + 1
-    }
-    
     # 2.4 GHz
     if (band == 1) {
         if (freq >= 2412 && freq <= 2472) return int((freq - 2407)/5)
         if (freq == 2484) return 14
     }
 
-    # 5 GHz explicit mapping - expanded for US and other regions
+    # 5 GHz explicit mapping
     if (band == 2) {  
-        # Japan specific
-        if (freq == 4910) return 1
-        if (freq == 4915) return 2
-        if (freq == 4920) return 3
-        if (freq == 4925) return 4
-        if (freq == 4930) return 5
-        if (freq == 4935) return 6
-        if (freq == 4940) return 7
-        if (freq == 4945) return 8
-        if (freq == 4950) return 9
-        if (freq == 4955) return 10
-        if (freq == 4960) return 11
-        if (freq == 4965) return 12
-        if (freq == 4970) return 13
-        if (freq == 4975) return 14
-        if (freq == 4980) return 15
-        if (freq == 4985) return 16
-        if (freq == 4990) return 17
-        
-        # Standard UNII-1, UNII-2, UNII-2e, UNII-3
-        if (freq == 5170) return 34
+        if (freq == 4910) return 1   # Japan
+        if (freq == 4915) return 2   # Japan
+        if (freq == 4920) return 3   # Japan
+        if (freq == 4925) return 4   # Japan
+        if (freq == 4930) return 5   # Japan
+        if (freq == 4935) return 6   # Japan
+        if (freq == 4940) return 7   # Japan
+        if (freq == 4945) return 8   # Japan
+        if (freq == 4950) return 9   # Japan
+        if (freq == 4955) return 10  # Japan
+        if (freq == 4960) return 11  # Japan
+        if (freq == 4965) return 12  # Japan
+        if (freq == 4970) return 13  # Japan
+        if (freq == 4975) return 14  # Japan
+        if (freq == 4980) return 15  # Japan
+        if (freq == 4985) return 16  # Japan
+        if (freq == 4990) return 17  # Japan
+        if (freq == 5170) return 34  # Japan
         if (freq == 5180) return 36
-        if (freq == 5190) return 38         
+        if (freq == 5190) return 38  # Japan          
         if (freq == 5200) return 40
-        if (freq == 5210) return 42
+        if (freq == 5210) return 42  # Japan
         if (freq == 5220) return 44
-        if (freq == 5230) return 46
+        if (freq == 5230) return 46  # Japan
         if (freq == 5240) return 48
-        if (freq == 5250) return 50
         if (freq == 5260) return 52
-        if (freq == 5270) return 54
         if (freq == 5280) return 56
-        if (freq == 5290) return 58
         if (freq == 5300) return 60
-        if (freq == 5310) return 62
         if (freq == 5320) return 64
-        if (freq == 5340) return 68
-        if (freq == 5480) return 96
+        if (freq == 5340) return 68  # USA - DFS
+        if (freq == 5480) return 96  # USA - DFS
         if (freq == 5500) return 100
         if (freq == 5520) return 104
         if (freq == 5540) return 108
@@ -78,9 +64,7 @@ function freq_to_channel(freq, band) {
         if (freq == 5805) return 161
         if (freq == 5825) return 165
         if (freq == 5845) return 169
-        if (freq == 5865) return 173
-        if (freq == 5885) return 177  # Additional US channels
-        if (freq == 5905) return 181  # Additional US channels
+        if (freq == 5865) return 173 
     }
 
     # 6 GHz Wi-Fi channels (US/standard) 20MHz spacing
@@ -157,6 +141,9 @@ function freq_to_channel(freq, band) {
     return ""
 }
 
+BEGIN {
+    allowed_channels = ""
+}
 
 /\([0-9]+ - [0-9]+/ {
     # extract start and end frequency
@@ -181,20 +168,43 @@ function freq_to_channel(freq, band) {
         }
     }
 
-    # determine band and label - EXPANDED RANGES
-    if (start >= 902 && end <= 928) { band = 0; bandtxt="(900MHz)"; step=2 }
-    else if (start >= 2400 && end <= 2500) { band = 1; bandtxt="(2.4GHz)"; step=5 }
-    else if ((start >= 4910 && end <= 5895) || (start >= 5150 && end <= 5895)) { band = 2; bandtxt="(5GHz)"; step=5 }
-    else if (start >= 5925 && end <= 7125) { band = 3; bandtxt="(6GHz)"; step=1 }
-    else if (start >= 57000) { band = 4; bandtxt="(60GHz)"; step=1 }
+    # determine band and label
+    if (start >= 2400 && end <= 2500) { band = 1; bandtxt="(2.4GHz)"; step=5 }
+    else if (start >= 4910 && end <= 5865) { band = 2; bandtxt="(5GHz)"; step=5 }
+    else if (start >= 5925 && end <= 7125) { band = 3; bandtxt="(6GHz)"; step=1 }     # loop every 1 MHz
+    else if (start >= 57000) { band = 4; bandtxt="(60GHz)"; step=1 }                # loop every 1 MHz
     else next
+
 
     # print all channels in range
     for (f = start; f <= end; f += step) {
         ch = freq_to_channel(f, band)
         if (ch == "") continue
+        
+        # Build allowed_channels - only 2.4GHz and 5GHz without DFS
+        if ((band == 1 || band == 2) && restrictions !~ /DFS/) {
+            if (allowed_channels == "") {
+                allowed_channels = ch
+            } else {
+                allowed_channels = allowed_channels "," ch
+            }
+        }
+        
+        # Build dfs_channels - only 2.4GHz and 5GHz with DFS
+        if ((band == 1 || band == 2) && restrictions ~ /DFS/) {
+            if (dfs_channels == "") {
+                dfs_channels = ch
+            } else {
+                dfs_channels = dfs_channels "," ch
+            }
+        }
+        
         if (restrictions != "") print ch " " bandtxt " - " restrictions
         else print ch " " bandtxt
     }
 }
-'
+
+END {
+    print "\nAllowed channels (2.4GHz & 5GHz without DFS): " allowed_channels
+    print "DFS channels (2.4GHz & 5GHz with DFS): " dfs_channels
+}'
