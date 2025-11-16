@@ -8,7 +8,7 @@ UN=${SUDO_USER:-$(whoami)}
 SSID=""    # Default is "Open WiFi" if you leave SSID empty.
 CHANNEL=""    # Supports 2.4GHz and 5GHz. You can leave empty and the script will randomize channel.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY=""   # set your country here. You can leave empty, default is US.
+COUNTRY=""   # set your country here. You can leave empty, default is US. be aware of regulations.
                 
 
 
