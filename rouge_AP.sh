@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version 1.9 17/11/25 01:10
+# Version 2.0 17/11/25 01:30
 
 
 UN=${SUDO_USER:-$(whoami)}
@@ -319,7 +319,7 @@ check_oui() {
     if [ ! -f "$OUI_FILE" ]; then
         echo -e "[*] Downloading OUI vendor file..."
         wget -q https://raw.githubusercontent.com/idoCo10/OUI-list/main/oui.txt -O "$OUI_FILE"
-        [[ ! -f "$OUI_FILE" ]] && { echo -e "${RED}Failed to download OUI vendor file.${RESET}"; exit 1; }
+        [[ ! -f "$OUI_FILE" ]] && { echo -e "${RED}Failed to download OUI vendor file.${RESET}"; }
     fi
 }
 
@@ -498,18 +498,15 @@ elif (( CHANNEL >= 36 && CHANNEL <= 161 )); then
     VHT_EXTRA="vht_oper_chwidth=1
 vht_oper_centr_freq_seg0_idx=$CENTER_FREQ"
     
-elif (( CHANNEL >= 165 && CHANNEL <= 169 )); then
-    # 5GHz without VHT (channels 165-169 are 20MHz only)
+elif (( CHANNEL >= 165 && CHANNEL <= 177 )); then
+    # 5GHz without VHT (20MHz only)
     HW_MODE="a"
     IEEE80211N="ieee80211n=1"
-    IEEE80211AC=""  # No AC on these channels
-    HT_CAPAB="[HT20]"  # Force HT20 mode
-    VHT_CAPAB=""
-    VHT_EXTRA=""
+    HT_CAPAB="[HT20]"
     
 else
     echo -e "${RED}[!] Invalid channel: $CHANNEL in your region: $COUNTRY.${RESET}"
-    exit 1
+    cleanup
 fi
 
 # Create hostapd configuration
@@ -555,7 +552,6 @@ while [ $elapsed -lt $timeout ]; do
         awk '{print "\t"$0}' /tmp/hostapd.log
         kill $HAPD_PID 2>/dev/null
         cleanup
-        exit 1
     fi
     sleep 1
     ((elapsed++))
@@ -565,7 +561,6 @@ done
 if ! grep -q "AP-ENABLED" /tmp/hostapd.log; then
     echo -e "${RED}[!] Hostapd did not start within $timeout seconds. Check /tmp/hostapd.log${RESET}"
     cleanup
-    exit 1
 fi
 
 
