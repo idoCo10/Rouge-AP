@@ -1,17 +1,17 @@
 #!/bin/bash
-# Version 1.6 16/11/25 02:50
+# Version 1.9 17/11/25 00:15
+# new channels method!
 
 UN=${SUDO_USER:-$(whoami)}
 
 # --- CONFIG ---
-SSID="OOOpen"
-CHANNEL=""    # Supports 2.4GHz and 5GHz. You can leave empty too.
+SSID="Home"
+CHANNEL=""    # Supports 2.4GHz and 5GHz. You can leave empty and the script will randomize channel.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY="TH"   # set your country here its important for RESTRICTED and DFS channels. You can leave empty too.
+COUNTRY="TH"   # set your country here. You can leave empty, default is US.
                 
 
-# Check US channels: 42,169,34,4,
-# TH: 38,46,
+
 
 WIFI_INTERFACE="wlan0"
 LAN_INTERFACE="eth0"   # Internet
@@ -29,6 +29,7 @@ RED="\e[31m"
 YELLOW="\e[33m"  
 BLUE="\e[34m"
 ORANGE=$'\033[1;33m'
+MAGENTA='\033[0;35m'
 RESET="\e[0m"  # No Color
 
 
@@ -116,171 +117,201 @@ country_check() {
 }
 
 
+
+
 # --- CHANNEL CHECK ---
 channel_check() {
-    # Get allowed and DFS channels from regulatory domain
-    local reg_info=$(iw reg get)
-    
-    local channel_info=$(echo "$reg_info" | awk '
-    function freq_to_channel(freq, band) {
-        # 2.4 GHz
-        if (band == 1) {
-            if (freq >= 2412 && freq <= 2472) return int((freq - 2407)/5)
-            if (freq == 2484) return 14
-        }
-        # 5 GHz explicit mapping
-        if (band == 2) {  
-            if (freq == 4910) return 1;   if (freq == 4915) return 2;   if (freq == 4920) return 3
-            if (freq == 4925) return 4;   if (freq == 4930) return 5;   if (freq == 4935) return 6
-            if (freq == 4940) return 7;   if (freq == 4945) return 8;   if (freq == 4950) return 9
-            if (freq == 4955) return 10;  if (freq == 4960) return 11;  if (freq == 4965) return 12
-            if (freq == 4970) return 13;  if (freq == 4975) return 14;  if (freq == 4980) return 15
-            if (freq == 4985) return 16;  if (freq == 4990) return 17;  if (freq == 5170) return 34
-            if (freq == 5180) return 36;  if (freq == 5190) return 38;  if (freq == 5200) return 40
-            if (freq == 5210) return 42;  if (freq == 5220) return 44;  if (freq == 5230) return 46
-            if (freq == 5240) return 48;  if (freq == 5260) return 52;  if (freq == 5280) return 56
-            if (freq == 5300) return 60;  if (freq == 5320) return 64;  if (freq == 5340) return 68
-            if (freq == 5480) return 96;  if (freq == 5500) return 100; if (freq == 5520) return 104
-            if (freq == 5540) return 108; if (freq == 5560) return 112; if (freq == 5580) return 116
-            if (freq == 5600) return 120; if (freq == 5620) return 124; if (freq == 5640) return 128
-            if (freq == 5660) return 132; if (freq == 5680) return 136; if (freq == 5700) return 140
-            if (freq == 5720) return 144; if (freq == 5745) return 149; if (freq == 5765) return 153
-            if (freq == 5785) return 157; if (freq == 5805) return 161; if (freq == 5825) return 165
-            if (freq == 5845) return 169; if (freq == 5865) return 173 
-        }
-        return ""
-    }
-    BEGIN { allowed = ""; dfs = "" }
-    /\([0-9]+ - [0-9]+/ {
-        match($0, /\(([0-9]+) - ([0-9]+)/, m)
-        start = m[1]; end = m[2]
-        rest = $0; sub(/^[^)]*\) *,? */, "", rest); gsub(/^ +| +$/, "", rest)
-        split(rest, restr_array, ",")
-        restrictions = ""
-        for (i in restr_array) {
-            r = restr_array[i]
-            gsub(/^ +| +$/, "", r); gsub(/^\(|\)$/, "", r)
-            if (r !~ /^N\/A/ && r !~ /0 ms/ && r !~ /^[0-9]+$/) {
-                if (restrictions == "") restrictions = r
-                else restrictions = restrictions " - " r
-            }
-        }
-        if (start >= 2400 && end <= 2500) { band = 1; step=5 }
-        else if (start >= 4910 && end <= 5865) { band = 2; step=5 }
-        else next
-        for (f = start; f <= end; f += step) {
-            ch = freq_to_channel(f, band)
-            if (ch == "") continue
-            if ((band == 1 || band == 2) && restrictions !~ /DFS/) {
-                if (allowed == "") allowed = ch; else allowed = allowed "," ch
-            }
-            if ((band == 1 || band == 2) && restrictions ~ /DFS/) {
-                if (dfs == "") dfs = ch; else dfs = dfs "," ch
-            }
-        }
-    }
-    END { print allowed "|" dfs }
-    ')
-    
-    # Split the result into allowed_channels and dfs_channels
-    allowed_channels=$(echo "$channel_info" | cut -d'|' -f1)
-    dfs_channels=$(echo "$channel_info" | cut -d'|' -f2)
+    local iw_output
+    iw_output=$(iw list 2>/dev/null)
 
-    # Get hardware disabled channels - FIXED VERSION
-    local disabled_channels=$(iw list 2>/dev/null | awk '
-    BEGIN { disabled_24 = ""; disabled_5 = "" }
-    /MHz.*\[.*\].*disabled/ {
-        # Extract channel number from brackets
-        if (match($0, /\[([0-9]+)\].*disabled/)) {
-            channel = substr($0, RSTART+1, RLENGTH-1)
-            channel = substr(channel, 1, index(channel, "]")-1)
-            
-            # Determine band based on frequency
-            if ($0 ~ /24[0-9][0-9]/) {
-                if (disabled_24 == "") disabled_24 = channel
-                else disabled_24 = disabled_24 "," channel
-            }
-            else if ($0 ~ /[0-9]{4}\.[0-9]/ && $0 !~ /24[0-9][0-9]/) {
-                if (disabled_5 == "") disabled_5 = channel
-                else disabled_5 = disabled_5 "," channel
-            }
-        }
-    }
-    END { print disabled_24 "|" disabled_5 }
-    ')
-    
-    local disabled_24=$(echo "$disabled_channels" | cut -d'|' -f1)
-    local disabled_5=$(echo "$disabled_channels" | cut -d'|' -f2)
+    # Initialize arrays
+    declare -A allowed_24 allowed_5 allowed_6
+    declare -A dfs_24 dfs_5 dfs_6
+    declare -A disabled_24 disabled_5 disabled_6
+    declare -A noir_24 noir_5 noir_6
 
-    # Debug: Show what channels we found
-    echo -e "${GREEN}[✓] Allowed channels:${RESET} $allowed_channels"
-    echo -e "${RED}[!] DFS channels:${RESET} $dfs_channels"
+    # Parse iw list output
+    while IFS= read -r line; do
+        # Detect band
+        if [[ "$line" =~ ^[[:space:]]*Band[[:space:]]+([0-9]+): ]]; then
+            case "${BASH_REMATCH[1]}" in
+                1) current_band="24" ;;
+                2) current_band="5" ;;
+                4) current_band="6" ;;
+                *) current_band="" ;;
+            esac
+            continue
+        fi
+
+        # Skip if no band
+        [[ -z "$current_band" ]] && continue
+
+        # Detect channel lines: * MHz [num] (restrictions)
+        if [[ "$line" =~ \[*[[:space:]]*([0-9]+)[[:space:]]*MHz[[:space:]]*\[([0-9]+)\](.*) ]]; then
+            local channel="${BASH_REMATCH[2]}"
+            local rest="${BASH_REMATCH[3]}"
+
+            local type="allowed"
+            [[ "$rest" =~ disabled ]] && type="disabled"
+            [[ "$rest" =~ "radar detection" ]] && type="dfs"
+            [[ "$rest" =~ "no IR" ]] && type="noir"
+
+            # Sometimes both DFS and no IR exist
+            [[ "$rest" =~ "radar detection" ]] && [[ "$rest" =~ "no IR" ]] && type="dfs_noir"
+
+            case "$current_band:$type" in
+                "24:allowed") allowed_24["$channel"]=1 ;;
+                "5:allowed") allowed_5["$channel"]=1 ;;
+                "6:allowed") allowed_6["$channel"]=1 ;;
+                "24:dfs") dfs_24["$channel"]=1 ;;
+                "5:dfs") dfs_5["$channel"]=1 ;;
+                "6:dfs") dfs_6["$channel"]=1 ;;
+                "24:disabled") disabled_24["$channel"]=1 ;;
+                "5:disabled") disabled_5["$channel"]=1 ;;
+                "6:disabled") disabled_6["$channel"]=1 ;;
+                "24:noir") noir_24["$channel"]=1 ;;
+                "5:noir") noir_5["$channel"]=1 ;;
+                "6:noir") noir_6["$channel"]=1 ;;
+                "24:dfs_noir")
+                    dfs_24["$channel"]=1
+                    noir_24["$channel"]=1
+                    ;;
+                "5:dfs_noir")
+                    dfs_5["$channel"]=1
+                    noir_5["$channel"]=1
+                    ;;
+                "6:dfs_noir")
+                    dfs_6["$channel"]=1
+                    noir_6["$channel"]=1
+                    ;;
+            esac
+        fi
+    done <<< "$iw_output"
+
+	# Helper function to format channel lists numerically
+	format_channels() {
+	    local -n channels=$1
+	    if [ ${#channels[@]} -eq 0 ]; then
+		echo "(none)"
+		return
+	    fi
+	    # Extract keys and sort numerically
+	    local sorted=($(printf '%s\n' "${!channels[@]}" | sort -n))
+	    printf '%s' "$(IFS=,; echo "${sorted[*]}")"
+	}
+
+    # Display results
+    echo -e "[*] Channel information in $COUNTRY:"
     
-    # Show disabled channels 
-    if [[ -n "$disabled_24" && -n "$disabled_5" ]]; then
-        echo -e "${RED}[!] Disabled Hardware channels:${RESET} 2.4GHz - $disabled_24. 5GHz - $disabled_5"
-    elif [[ -n "$disabled_24" ]]; then
-        echo -e "${RED}[!] Disabled Hardware channels:${RESET} 2.4GHz - $disabled_24"
-    elif [[ -n "$disabled_5" ]]; then
-        echo -e "${RED}[!] Disabled Hardware channels:${RESET} 5GHz - $disabled_5"
+    # Allowed channels
+    echo -e "\n${GREEN}[✓] Allowed channels:${RESET}"
+    echo -e "  2.4GHz: $(format_channels allowed_24)"
+    echo -e "  5GHz:   $(format_channels allowed_5)"
+    echo -e "  6GHz:   $(format_channels allowed_6)"
+
+    # DFS channels
+    echo -e "\n${YELLOW}DFS (radar detection) channels:${RESET}"
+    echo -e "  2.4GHz: $(format_channels dfs_24)"
+    echo -e "  5GHz:   $(format_channels dfs_5)"
+    echo -e "  6GHz:   $(format_channels dfs_6)"
+
+    # Disabled channels
+    echo -e "\n${RED}Disabled channels:${RESET}"
+    echo -e "  2.4GHz: $(format_channels disabled_24)"
+    echo -e "  5GHz:   $(format_channels disabled_5)"
+    echo -e "  6GHz:   $(format_channels disabled_6)"
+
+    # No IR channels
+    echo -e "\n${BLUE}No IR channels:${RESET}"
+    echo -e "  2.4GHz: $(format_channels noir_24)"
+    echo -e "  5GHz:   $(format_channels noir_5)"
+    echo -e "  6GHz:   $(format_channels noir_6)"
+
+    
+
+# --- Manual channel selection ---
+if [[ -n "$CHANNEL" ]]; then
+    echo -e "\n[*] Specified channel: $CHANNEL"
+
+    # Check if channel is in allowed 2.4GHz or 5GHz
+    if [[ -z "${allowed_24[$CHANNEL]}" && -z "${allowed_5[$CHANNEL]}" ]]; then
+        echo -e "${RED}[!] ERROR: Channel $CHANNEL is not in the allowed 2.4GHz or 5GHz channels for $COUNTRY!${RESET}"
+        cleanup
     fi
-    
-    
-    
-    
-    
-    # --- Manual channel selection - don't change, just validate ---
-    if [[ -n "$CHANNEL" ]]; then
-        echo "[*] Specified channel: $CHANNEL"
-        
-        # Check if manually selected channel is hardware disabled
-        if [[ -n "$disabled_24" && ",$disabled_24," == *",$CHANNEL,"* ]] || 
-           [[ -n "$disabled_5" && ",$disabled_5," == *",$CHANNEL,"* ]]; then
-            echo -e "${RED}[!] ERROR: Channel $CHANNEL is HARDWARE DISABLED on this adapterfor $COUNTRY!${RESET}"
-            echo "           You can change country if you want to use this channel."
-            cleanup
-            exit 1
-        fi
 
-        # Check if manually selected channel is DFS
-        if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
-            echo -e "${RED}[!] WARNING: Channel $CHANNEL is DFS (may not work in AP mode)${RESET}"
-            # Don't return error, just warn
-        fi
-
-        #echo -e "${GREEN}[✓] Using manually specified channel: $CHANNEL${RESET}"
-        
-    # --- Randomized channel selection - filter out disabled channels ---
-    else
-        echo "[*] No channel specified, randomizing channel..."
-        
-        # Create list of available channels (allowed AND not disabled)
-        local available_channels=""
-        for ch in $(echo "$allowed_channels" | tr ',' ' '); do
-            # Skip if channel is hardware disabled
-            if [[ -n "$disabled_24" && ",$disabled_24," == *",$ch,"* ]]; then
-                continue
-            fi
-            if [[ -n "$disabled_5" && ",$disabled_5," == *",$ch,"* ]]; then
-                continue
-            fi
-            available_channels="$available_channels$ch,"
-        done
-        
-        available_channels=$(echo "$available_channels" | sed 's/,$//')
-        
-        if [[ -z "$available_channels" ]]; then
-            echo -e "${RED}[!] ERROR: No available channels after filtering hardware disabled ones!${RESET}"
-            return 1
-        fi
-        
-        # Pick random channel from available ones
-        CHANNEL=$(echo "$available_channels" | tr ',' '\n' | shuf -n1)
-        echo -e "${GREEN}[✓] Randomized channel selected: $CHANNEL${RESET}"
+    # Check if manually selected channel is hardware disabled
+    if [[ -n "$disabled_24_str" && ",$disabled_24_str," == *",$CHANNEL,"* ]] || 
+       [[ -n "$disabled_5_str" && ",$disabled_5_str," == *",$CHANNEL,"* ]]; then
+        echo -e "${RED}[!] ERROR: Channel $CHANNEL is HARDWARE DISABLED on this adapter!${RESET}"
+        return 1
     fi
+
+    # Check DFS / No IR restrictions
+    local dfs_flag=0
+    local noir_flag=0
+
+    if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
+        dfs_flag=1
+    fi
+
+    if [[ -n "${noir_24[$CHANNEL]}" || -n "${noir_5[$CHANNEL]}" ]]; then
+        noir_flag=1
+    fi
+
+    if [[ $dfs_flag -eq 1 || $noir_flag -eq 1 ]]; then
+        echo -e "${RED}[!] ERROR: Channel $CHANNEL is restricted:${RESET}"
+        [[ $dfs_flag -eq 1 ]] && echo -e "      - DFS (radar detection)"
+        [[ $noir_flag -eq 1 ]] && echo -e "      - No IR (cannot initiate AP)"
+        return 1
+    fi
+
+    echo -e "${GREEN}[✓] Channel $CHANNEL is allowed.${RESET}\n"
+
+        
+# --- Randomized channel selection ---
+else
+        echo -e "\n[*] No channel specified, randomizing channel..."
+        
+	    # Build pool of allowed channels from 2.4GHz and 5GHz
+	    available_channels=()
+
+	    # 2.4GHz
+	    for ch in $(printf '%s\n' "${!allowed_24[@]}" | sort -n); do
+		# Skip if disabled
+		if [[ -n "$disabled_24_str" && ",$disabled_24_str," == *",$ch,"* ]]; then
+		    continue
+		fi
+		available_channels+=("$ch")
+	    done
+
+	    # 5GHz
+	    for ch in $(printf '%s\n' "${!allowed_5[@]}" | sort -n); do
+		# Skip if disabled
+		if [[ -n "$disabled_5_str" && ",$disabled_5_str," == *",$ch,"* ]]; then
+		    continue
+		fi
+		available_channels+=("$ch")
+	    done
+
+	    # Check if pool is empty
+	    if [ ${#available_channels[@]} -eq 0 ]; then
+		echo -e "${RED}[!] ERROR: No available 2.4GHz or 5GHz channels to choose from!${RESET}"
+		return 1
+	    fi
+	    
+	    #echo -e "\n\nPOOL:  ${available_channels[*]}\n\n"
+
+	    # Pick random channel
+	    CHANNEL="${available_channels[RANDOM % ${#available_channels[@]}]}"
+	    echo -e "${GREEN}[✓] Randomized channel selected: $CHANNEL${RESET}"
+fi
     
     return 0
 }
+
+
+
+
 
 
 # --- CLEANUP FUNCTION ---
@@ -454,25 +485,6 @@ sudo ip link set $WIFI_INTERFACE up
 
 
 
-# --- DETERMINE BAND & CAPABILITIES BASED ON CHANNEL ---
-if (( CHANNEL >= 1 && CHANNEL <= 14 )); then
-    HW_MODE="g"
-    IEEE80211N="ieee80211n=1"
-    IEEE80211AC=""
-    #HT_CAPAB="[HT40+]"
-    #VHT_CAPAB=""
-elif (( CHANNEL >= 36 && CHANNEL <= 169 )); then
-    HW_MODE="a"
-    IEEE80211N="ieee80211n=1"
-    IEEE80211AC="ieee80211ac=1"
-    HT_CAPAB="[HT40+]"
-    VHT_CAPAB="[VHT80]"
-else
-    echo -e "${RED}[!] Invalid channel: $CHANNEL in your region: $COUNTRY.${RESET}"
-    exit 1
-fi
-
-
 # --- HOSTAPD CONFIG ---
 HOSTAPD_CONF="/tmp/hostapd.conf"
 
@@ -480,38 +492,85 @@ HOSTAPD_CONF="/tmp/hostapd.conf"
 get_center_freq() {
     local channel=$1
     case $channel in
+        # UNII-1 Block 36-48 (Center 42)
         36|40|44|48) echo "42" ;;
+        # UNII-2a Block 52-64 (Center 58) 
+        52|56|60|64) echo "58" ;;
+        # UNII-2c Block 100-112 (Center 106)
+        100|104|108|112) echo "106" ;;
+        # UNII-2c Block 116-128 (Center 122)
+        116|120|124|128) echo "122" ;;
+        # UNII-2c Block 132-144 (Center 138)
+        132|136|140|144) echo "138" ;;
+        # UNII-3 Block 149-161 (Center 155)
         149|153|157|161) echo "155" ;;
-        165) echo "155" ;;
-        *) echo "$((channel + 2))" ;;
+        # 165-169 are 20MHz only - no center frequency needed
+        165|169) echo "" ;;
+        # 2.4GHz channels don't use center frequency concept for VHT
+        *) echo "$channel" ;;
     esac
 }
 
 CENTER_FREQ=$(get_center_freq $CHANNEL)
 
+# --- DETERMINE BAND & CAPABILITIES BASED ON CHANNEL ---
+if (( CHANNEL >= 1 && CHANNEL <= 14 )); then
+    # 2.4GHz
+    HW_MODE="g"
+    IEEE80211N="ieee80211n=1"
+    IEEE80211AC=""
+    HT_CAPAB="[HT20]"
+    VHT_CAPAB=""
+    VHT_EXTRA=""  # No VHT settings for 2.4GHz
+    
+elif (( CHANNEL >= 36 && CHANNEL <= 161 )); then
+    # 5GHz with VHT support (channels 36-161)
+    HW_MODE="a"
+    IEEE80211N="ieee80211n=1"
+    IEEE80211AC="ieee80211ac=1"
+    HT_CAPAB="[HT40+]"
+    VHT_CAPAB="[SHORT-GI-80][SU-BEAMFORMEE][VHT80]"
+    VHT_EXTRA="vht_oper_chwidth=1
+vht_oper_centr_freq_seg0_idx=$CENTER_FREQ"
+    
+elif (( CHANNEL >= 165 && CHANNEL <= 169 )); then
+    # 5GHz without VHT (channels 165-169 are 20MHz only)
+    HW_MODE="a"
+    IEEE80211N="ieee80211n=1"
+    IEEE80211AC=""  # No AC on these channels
+    HT_CAPAB="[HT20]"  # Force HT20 mode
+    VHT_CAPAB=""
+    VHT_EXTRA=""
+    
+else
+    echo -e "${RED}[!] Invalid channel: $CHANNEL in your region: $COUNTRY.${RESET}"
+    exit 1
+fi
+
+# Create hostapd configuration
 cat <<EOF > $HOSTAPD_CONF
 interface=$WIFI_INTERFACE
 ssid=$SSID
 channel=$CHANNEL
 country_code=$COUNTRY
-auth_algs=1   # open wifi
+auth_algs=1
 driver=nl80211
 hw_mode=$HW_MODE
 $IEEE80211N
 $IEEE80211AC
-ht_capab=$HT_CAPAB
-vht_capab=$VHT_CAPAB
-ieee80211d=1 # if you set 0 - Radar detection may be bypassed (illegal in some regions) may still be blocked on the driver level.
-ieee80211h=1 # if you set 0 - AP works on DFS channels that require radar detection (illegal in MOST regions) may still be blocked on the driver level.  
+EOF
+
+# Only add these if they have values
+[[ -n "$HT_CAPAB" ]] && echo "ht_capab=$HT_CAPAB" >> $HOSTAPD_CONF
+[[ -n "$VHT_CAPAB" ]] && echo "vht_capab=$VHT_CAPAB" >> $HOSTAPD_CONF
+[[ -n "$VHT_EXTRA" ]] && echo "$VHT_EXTRA" >> $HOSTAPD_CONF
+
+cat <<EOF >> $HOSTAPD_CONF
+ieee80211d=1
+ieee80211h=1
 wmm_enabled=1
 ignore_broadcast_ssid=0
 EOF
-
-# Only add VHT settings for 5GHz
-if (( CHANNEL >= 36 && CHANNEL <= 165 )); then
-    echo "vht_oper_chwidth=1" >> $HOSTAPD_CONF
-    echo "vht_oper_centr_freq_seg0_idx=$CENTER_FREQ" >> $HOSTAPD_CONF
-fi
 
 
 # --- Start hostapd ---
@@ -528,7 +587,6 @@ while [ $elapsed -lt $timeout ]; do
     if grep -qi -E "AP-DISABLED|error|invalid" /tmp/hostapd.log; then
         echo -e "${RED}[!] Hostapd failed to start.${RESET}"
         echo -e "${RED}--- Hostapd log ---${RESET}"
-        #grep -i -E "AP-DISABLED|Could not select|Hardware does not support|Invalid|error|Failed" /tmp/hostapd.log
         awk '{print "\t"$0}' /tmp/hostapd.log
         kill $HAPD_PID 2>/dev/null
         cleanup
