@@ -1,6 +1,6 @@
 #!/bin/bash
-# Version 1.9 17/11/25 00:15
-# new channels method!
+# Version 1.9 17/11/25 01:10
+
 
 UN=${SUDO_USER:-$(whoami)}
 
@@ -8,7 +8,7 @@ UN=${SUDO_USER:-$(whoami)}
 SSID="Home"
 CHANNEL=""    # Supports 2.4GHz and 5GHz. You can leave empty and the script will randomize channel.
 AP_MAC=""      # You can set any MAC you want (spoofing existing AP). You can leave empty too.
-COUNTRY="TH"   # set your country here. You can leave empty, default is US.
+COUNTRY=""   # set your country here. You can leave empty, default is US.
                 
 
 
@@ -233,38 +233,30 @@ channel_check() {
 if [[ -n "$CHANNEL" ]]; then
     echo -e "\n[*] Specified channel: $CHANNEL"
 
+    # Check if manually selected channel is hardware disabled
+    if [[ -n "${disabled_24[$CHANNEL]}" || -n "${disabled_5[$CHANNEL]}" ]]; then
+        echo -e "${RED}[!] ERROR: Channel $CHANNEL is DISABLED for $COUNTRY!${RESET}"
+        cleanup
+    fi
+
+    # --- Check DFS restrictions ---
+    if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
+        echo -e "${RED}[!] ERROR: Channel $CHANNEL has DFS (radar detection) restriction in $COUNTRY!${RESET}"
+        cleanup
+    fi
+    
+    # --- Check No IR restrictions ---
+    if [[ -n "${noir_24[$CHANNEL]}" || -n "${noir_5[$CHANNEL]}" ]]; then
+        echo -e "${RED}[!] ERROR: Channel $CHANNEL has No IR (cannot initiate AP) restriction in $COUNTRY!${RESET}"
+        cleanup
+    fi
+
     # Check if channel is in allowed 2.4GHz or 5GHz
     if [[ -z "${allowed_24[$CHANNEL]}" && -z "${allowed_5[$CHANNEL]}" ]]; then
         echo -e "${RED}[!] ERROR: Channel $CHANNEL is not in the allowed 2.4GHz or 5GHz channels for $COUNTRY!${RESET}"
         cleanup
     fi
-
-    # Check if manually selected channel is hardware disabled
-    if [[ -n "$disabled_24_str" && ",$disabled_24_str," == *",$CHANNEL,"* ]] || 
-       [[ -n "$disabled_5_str" && ",$disabled_5_str," == *",$CHANNEL,"* ]]; then
-        echo -e "${RED}[!] ERROR: Channel $CHANNEL is HARDWARE DISABLED on this adapter!${RESET}"
-        return 1
-    fi
-
-    # Check DFS / No IR restrictions
-    local dfs_flag=0
-    local noir_flag=0
-
-    if echo "$dfs_channels" | grep -qw "$CHANNEL"; then
-        dfs_flag=1
-    fi
-
-    if [[ -n "${noir_24[$CHANNEL]}" || -n "${noir_5[$CHANNEL]}" ]]; then
-        noir_flag=1
-    fi
-
-    if [[ $dfs_flag -eq 1 || $noir_flag -eq 1 ]]; then
-        echo -e "${RED}[!] ERROR: Channel $CHANNEL is restricted:${RESET}"
-        [[ $dfs_flag -eq 1 ]] && echo -e "      - DFS (radar detection)"
-        [[ $noir_flag -eq 1 ]] && echo -e "      - No IR (cannot initiate AP)"
-        return 1
-    fi
-
+    
     echo -e "${GREEN}[✓] Channel $CHANNEL is allowed.${RESET}\n"
 
         
@@ -272,45 +264,21 @@ if [[ -n "$CHANNEL" ]]; then
 else
         echo -e "\n[*] No channel specified, randomizing channel..."
         
-	    # Build pool of allowed channels from 2.4GHz and 5GHz
-	    available_channels=()
+	# Merge allowed_24 and allowed_5 into available_channels
+	available_channels=("${!allowed_24[@]}" "${!allowed_5[@]}")
 
-	    # 2.4GHz
-	    for ch in $(printf '%s\n' "${!allowed_24[@]}" | sort -n); do
-		# Skip if disabled
-		if [[ -n "$disabled_24_str" && ",$disabled_24_str," == *",$ch,"* ]]; then
-		    continue
-		fi
-		available_channels+=("$ch")
-	    done
+	# Sort numerically (optional)
+	available_channels=($(printf '%s\n' "${available_channels[@]}" | sort -n))
+	echo -e "\n\nChannels Pool: ${available_channels[*]}\n\n"
 
-	    # 5GHz
-	    for ch in $(printf '%s\n' "${!allowed_5[@]}" | sort -n); do
-		# Skip if disabled
-		if [[ -n "$disabled_5_str" && ",$disabled_5_str," == *",$ch,"* ]]; then
-		    continue
-		fi
-		available_channels+=("$ch")
-	    done
+	# Pick a random channel
+	CHANNEL="${available_channels[RANDOM % ${#available_channels[@]}]}"
+	echo -e "${GREEN}[✓] Randomized channel selected: $CHANNEL${RESET}"
 
-	    # Check if pool is empty
-	    if [ ${#available_channels[@]} -eq 0 ]; then
-		echo -e "${RED}[!] ERROR: No available 2.4GHz or 5GHz channels to choose from!${RESET}"
-		return 1
-	    fi
-	    
-	    #echo -e "\n\nPOOL:  ${available_channels[*]}\n\n"
-
-	    # Pick random channel
-	    CHANNEL="${available_channels[RANDOM % ${#available_channels[@]}]}"
-	    echo -e "${GREEN}[✓] Randomized channel selected: $CHANNEL${RESET}"
 fi
     
     return 0
 }
-
-
-
 
 
 
@@ -329,7 +297,7 @@ cleanup() {
     sudo iw dev $WIFI_INTERFACE set type managed 2>/dev/null
     sudo ip link set $WIFI_INTERFACE up
     sudo systemctl start NetworkManager
-    echo -e "${GREEN}[✓] Cleanup complete - Wi-Fi interface restored to normal mode${RESET}"
+    echo -e "${GREEN}[✓] Cleanup complete. Wi-Fi interface restored to normal mode.${RESET}"
     exit 0
 }
 
@@ -518,11 +486,8 @@ if (( CHANNEL >= 1 && CHANNEL <= 14 )); then
     # 2.4GHz
     HW_MODE="g"
     IEEE80211N="ieee80211n=1"
-    IEEE80211AC=""
     HT_CAPAB="[HT20]"
-    VHT_CAPAB=""
-    VHT_EXTRA=""  # No VHT settings for 2.4GHz
-    
+
 elif (( CHANNEL >= 36 && CHANNEL <= 161 )); then
     # 5GHz with VHT support (channels 36-161)
     HW_MODE="a"
