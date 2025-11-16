@@ -269,7 +269,7 @@ else
 
 	# Sort numerically (optional)
 	available_channels=($(printf '%s\n' "${available_channels[@]}" | sort -n))
-	echo -e "\n\nChannels Pool: ${available_channels[*]}\n\n"
+	#echo -e "\n\nChannels Pool: ${available_channels[*]}\n\n"
 
 	# Pick a random channel
 	CHANNEL="${available_channels[RANDOM % ${#available_channels[@]}]}"
